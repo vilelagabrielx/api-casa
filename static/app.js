@@ -853,9 +853,9 @@ async function startBrowserStreaming() {
             ws.close();
             return;
         }
-        const chunk = new Uint8Array(event.data);
-        if (chunk.length === 8192) {
-            playPCMChunk(chunk);
+        // Cada mensagem WebSocket contêm exatamente um chunk de 8192 bytes
+        if (event.data.byteLength === 8192) {
+            playPCMChunk(event.data);
         }
     };
     
@@ -872,11 +872,11 @@ async function startBrowserStreaming() {
     };
 }
 
-function playPCMChunk(uint8Chunk) {
+function playPCMChunk(arrayBuffer) {
     if (!audioCtx || audioCtx.state === 'suspended') return;
     
-    // Converte os bytes 16-bit PCM (little-endian) para float32 usando Int16Array direto
-    const pcm16 = new Int16Array(uint8Chunk.buffer, uint8Chunk.byteOffset, uint8Chunk.length / 2);
+    // Converte os bytes 16-bit PCM (little-endian) para float32 usando Int16Array direto sobre o ArrayBuffer
+    const pcm16 = new Int16Array(arrayBuffer);
     const numSamples = pcm16.length;
     const numFrames = numSamples / 2; // stereo (2 canais)
     
@@ -897,9 +897,10 @@ function playPCMChunk(uint8Chunk) {
     source.connect(gainNode);
     
     const now = audioCtx.currentTime;
-    // Se a linha do tempo acumulada estiver muito no passado (atraso de rede > 150ms), reseta a margem
-    if (nextPlayTime < now - 0.15) {
-        nextPlayTime = now + 0.15; // 150ms de jitter buffer inicial para áudio contínuo sem estalos
+    // Sob sob sob underflow de rede (nextPlayTime ficou atrás do tempo atual de reprodução),
+    // reinicializamos o jitter buffer em 150ms para garantir fluxo contínuo.
+    if (nextPlayTime < now) {
+        nextPlayTime = now + 0.15; // 150ms de jitter buffer
     }
     
     source.start(nextPlayTime);
