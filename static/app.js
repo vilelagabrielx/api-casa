@@ -383,6 +383,7 @@ const trackStatus = document.getElementById('track-status');
 const playPauseBtn = document.getElementById('play-pause-btn');
 const playIcon = document.getElementById('play-icon');
 const pauseIcon = document.getElementById('pause-icon');
+const stopBtn = document.getElementById('stop-btn');
 const prevBtn = document.getElementById('prev-btn');
 const nextBtn = document.getElementById('next-btn');
 const progressSlider = document.getElementById('progress-slider');
@@ -452,6 +453,7 @@ setupEventListeners = function() {
     });
 
     prevBtn.addEventListener('click', () => sendMusicControl('prev'));
+    stopBtn.addEventListener('click', () => sendMusicControl('stop'));
     nextBtn.addEventListener('click', () => sendMusicControl('skip'));
 
     // Barra de progresso interativa (seek)

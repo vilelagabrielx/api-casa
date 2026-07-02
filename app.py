@@ -747,6 +747,13 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 
             elif action == 'pause':
                 audio_player.pause()
+
+            elif action == 'stop':
+                current = queue_manager.get_current_track()
+                if current:
+                    delete_track_file(current)
+                audio_player.stop()
+                queue_manager.current_track = None
                 
             elif action == 'skip':
                 next_track = queue_manager.pop_next_track()
