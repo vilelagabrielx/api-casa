@@ -52,7 +52,8 @@ def get_lamp():
 class QueueManager:
     def __init__(self):
         self.queue = []
-        self.current_index = -1
+        self.current_track = None
+        self.history = []
         self.lock = threading.Lock()
 
     def add_url(self, url):
@@ -98,90 +99,82 @@ class QueueManager:
 
             with self.lock:
                 self.queue.extend(new_tracks)
-                # Se não havia nada tocando, aponta o índice para a primeira música adicionada
-                if self.current_index == -1 and len(self.queue) > 0:
-                    self.current_index = 0
+                # Se não havia nada tocando, a primeira da fila vira a ativa e sai da fila
+                if self.current_track is None and len(self.queue) > 0:
+                    self.current_track = self.queue.pop(0)
             
             return len(new_tracks)
 
     def get_queue(self):
         with self.lock:
-            # Retorna uma cópia da fila para thread safety
-            return list(self.queue), self.current_index
+            # Retorna uma cópia da fila (apenas músicas próximas)
+            return list(self.queue)
 
     def get_current_track(self):
         with self.lock:
-            if 0 <= self.current_index < len(self.queue):
-                return self.queue[self.current_index]
-            return None
+            return self.current_track
 
     def get_next_pending_download(self):
-        """Retorna a próxima música na fila que precisa de download."""
+        """Retorna a próxima música que precisa de download."""
         with self.lock:
-            # Começa procurando da música atual para frente
-            start_idx = max(0, self.current_index)
-            for i in range(start_idx, len(self.queue)):
-                if self.queue[i]['status'] == 'pending':
-                    return self.queue[i]
-            # Se não achou na frente, procura atrás (caso o usuário tenha voltado a música)
-            for i in range(0, start_idx):
-                if self.queue[i]['status'] == 'pending':
-                    return self.queue[i]
+            if self.current_track and self.current_track['status'] == 'pending':
+                return self.current_track
+            for track in self.queue:
+                if track['status'] == 'pending':
+                    return track
             return None
 
-    def next_track(self):
+    def pop_next_track(self):
+        """Pula para a próxima música e guarda a atual no histórico."""
         with self.lock:
-            if self.current_index < len(self.queue) - 1:
-                self.current_index += 1
-                return self.queue[self.current_index]
-            return None
+            if self.current_track:
+                self.history.append(self.current_track)
+                if len(self.history) > 20:
+                    self.history.pop(0)
+            if len(self.queue) > 0:
+                self.current_track = self.queue.pop(0)
+                return self.current_track
+            else:
+                self.current_track = None
+                return None
 
     def prev_track(self):
+        """Recupera a última música tocada do histórico e devolve a atual para a fila."""
         with self.lock:
-            if self.current_index > 0:
-                self.current_index -= 1
-                return self.queue[self.current_index]
+            if len(self.history) > 0:
+                if self.current_track:
+                    self.queue.insert(0, self.current_track)
+                self.current_track = self.history.pop()
+                return self.current_track
             return None
 
-    def set_current_index(self, index):
+    def select_track(self, index):
+        """Seleciona uma música específica da fila por índice, tocando-a imediatamente."""
         with self.lock:
             if 0 <= index < len(self.queue):
-                self.current_index = index
-                return self.queue[self.current_index]
+                if self.current_track:
+                    self.history.append(self.current_track)
+                self.current_track = self.queue.pop(index)
+                return self.current_track
             return None
 
     def remove_track(self, index):
         with self.lock:
             if 0 <= index < len(self.queue):
-                removed = self.queue.pop(index)
-                # Corrige o índice atual se a música removida estiver antes ou for a ativa
-                if index < self.current_index:
-                    self.current_index -= 1
-                elif index == self.current_index:
-                    # Se removeu a música ativa, para a reprodução ou mantém o índice
-                    if self.current_index >= len(self.queue):
-                        self.current_index = len(self.queue) - 1
-                return removed
+                return self.queue.pop(index)
             return None
 
     def clear_queue(self):
         with self.lock:
             self.queue = []
-            self.current_index = -1
+            self.current_track = None
+            self.history = []
 
     def reorder_queue(self, from_idx, to_idx):
         with self.lock:
             if 0 <= from_idx < len(self.queue) and 0 <= to_idx < len(self.queue):
                 track = self.queue.pop(from_idx)
                 self.queue.insert(to_idx, track)
-                
-                # Ajusta o índice ativo para acompanhar o movimento da música tocando
-                if self.current_index == from_idx:
-                    self.current_index = to_idx
-                elif from_idx < self.current_index <= to_idx:
-                    self.current_index -= 1
-                elif to_idx <= self.current_index < from_idx:
-                    self.current_index += 1
 
 
 # =================================================================
@@ -198,6 +191,7 @@ class AudioPlayer:
         self.is_playing = False
         self.volume = 0.8  # Volume de 0.0 a 1.0
         self.current_track_id = None
+        self.server_mute = False  # Modo apenas navegador muta o som no servidor
         self.lock = threading.Lock()
 
     def play_track(self, track):
@@ -242,6 +236,15 @@ class AudioPlayer:
     def _audio_callback(self, outdata, frames, time_info, status):
         """Callback executado pela thread do PortAudio para preencher o buffer de saída."""
         if not self.is_playing or self.data is None:
+            outdata.fill(0)
+            return
+
+        if self.server_mute:
+            # Mantém avanço e encerramento lógico em silêncio
+            with self.lock:
+                self.current_frame = min(self.current_frame + frames, len(self.data))
+                if self.current_frame >= len(self.data):
+                    self.is_playing = False
             outdata.fill(0)
             return
 
@@ -319,12 +322,12 @@ audio_player = AudioPlayer()
 
 def downloader_worker():
     """Baixa em background as músicas pendentes da fila."""
-    os.makedirs('cache', exist_ok=True)
+    os.makedirs('static/cache', exist_ok=True)
     while True:
         track = queue_manager.get_next_pending_download()
         if track:
             video_id = track['id']
-            out_path = f"cache/{video_id}.wav"
+            out_path = f"static/cache/{video_id}.wav"
             
             if os.path.exists(out_path):
                 print(f"[Cache] {track['title']} já baixada.")
@@ -339,7 +342,7 @@ def downloader_worker():
 
             ydl_opts = {
                 'format': 'bestaudio/best',
-                'outtmpl': f'cache/{video_id}',
+                'outtmpl': f'static/cache/{video_id}',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'wav',
@@ -353,8 +356,8 @@ def downloader_worker():
                 
                 # Garante que o arquivo foi criado e renomeado corretamente
                 final_path = out_path
-                if not os.path.exists(final_path) and os.path.exists(f"cache/{video_id}.wav.wav"):
-                    os.rename(f"cache/{video_id}.wav.wav", final_path)
+                if not os.path.exists(final_path) and os.path.exists(f"static/cache/{video_id}.wav.wav"):
+                    os.rename(f"static/cache/{video_id}.wav.wav", final_path)
                 
                 if os.path.exists(final_path):
                     print(f"[Download] Sucesso: {track['title']}")
@@ -386,7 +389,7 @@ def player_supervisor():
             
             if is_finished:
                 print("Música finalizada. Carregando próxima faixa...")
-                next_track = queue_manager.next_track()
+                next_track = queue_manager.pop_next_track()
                 if next_track:
                     # Tenta tocar. Se o status for pendente, o downloader irá baixar e tocar logo em seguida
                     if next_track['status'] == 'ready':
@@ -519,8 +522,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
 
     # Handlers do Player
     def handle_player_queue(self):
-        q, idx = queue_manager.get_queue()
-        self.send_json_response({"success": True, "queue": q, "current_index": idx})
+        q = queue_manager.get_queue()
+        self.send_json_response({"success": True, "queue": q})
 
     def handle_player_status(self):
         current = queue_manager.get_current_track()
@@ -530,7 +533,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
             "is_playing": audio_player.is_playing,
             "current_track": current,
             "position": round(pos, 1),
-            "volume": int(audio_player.volume * 100)
+            "volume": int(audio_player.volume * 100),
+            "server_mute": audio_player.server_mute
         })
 
     def handle_player_add(self):
@@ -574,7 +578,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 audio_player.pause()
                 
             elif action == 'skip':
-                next_track = queue_manager.next_track()
+                next_track = queue_manager.pop_next_track()
                 if next_track and next_track['status'] == 'ready':
                     audio_player.play_track(next_track)
                 else:
@@ -595,9 +599,18 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 vol = int(data.get('volume', 80))
                 audio_player.set_volume(vol / 100.0)
 
+            elif action == 'output_mode':
+                mode = data.get('mode', 'server')
+                if mode == 'browser':
+                    audio_player.server_mute = True
+                elif mode == 'server':
+                    audio_player.server_mute = False
+                elif mode == 'both':
+                    audio_player.server_mute = False
+
             elif action == 'select':
                 idx = int(data.get('index', 0))
-                track = queue_manager.set_current_index(idx)
+                track = queue_manager.select_track(idx)
                 if track and track['status'] == 'ready':
                     audio_player.play_track(track)
                 else:
@@ -605,16 +618,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
 
             elif action == 'remove':
                 idx = int(data.get('index', 0))
-                current_idx_before = queue_manager.current_index
-                removed = queue_manager.remove_track(idx)
-                
-                # Se removeu a música que estava tocando, para o player
-                if removed and idx == current_idx_before:
-                    audio_player.stop()
-                    # Toca a nova música que caiu no índice atual
-                    current = queue_manager.get_current_track()
-                    if current and current['status'] == 'ready':
-                        audio_player.play_track(current)
+                queue_manager.remove_track(idx)
 
             elif action == 'clear':
                 audio_player.stop()

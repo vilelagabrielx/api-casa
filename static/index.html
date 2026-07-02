@@ -165,6 +165,19 @@
                 <span id="volume-val">80%</span>
             </div>
 
+            <!-- Audio Output Selector -->
+            <div class="output-selector">
+                <span>Canal de Áudio:</span>
+                <div class="output-options">
+                    <button class="output-btn active" data-output="server">📢 Servidor</button>
+                    <button class="output-btn" data-output="browser">🎧 Navegador</button>
+                    <button class="output-btn" data-output="both">👥 Ambos</button>
+                </div>
+            </div>
+
+            <!-- Invisible HTML5 Audio element for local browser streaming -->
+            <audio id="browser-audio-player" style="display: none;"></audio>
+
             <hr class="divider">
 
             <!-- Add Track Form -->

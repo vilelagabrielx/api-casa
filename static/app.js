@@ -401,7 +401,8 @@ let playerState = {
     isPlaying: false,
     duration: 0,
     position: 0,
-    isDraggingProgress: false
+    isDraggingProgress: false,
+    outputMode: 'server' // 'server', 'browser', 'both'
 };
 
 // Modifica setupEventListeners existente para integrar o player
@@ -458,11 +459,32 @@ setupEventListeners = function() {
     volumeSlider.addEventListener('input', (e) => {
         const val = parseInt(e.target.value);
         volumeVal.textContent = `${val}%`;
+        const browserAudio = document.getElementById('browser-audio-player');
+        if (browserAudio) {
+            browserAudio.volume = val / 100.0;
+        }
     });
 
     volumeSlider.addEventListener('change', (e) => {
         const val = parseInt(e.target.value);
         sendMusicControl('volume', { volume: val });
+    });
+
+    // Configura botões de saída de áudio
+    const outputBtns = document.querySelectorAll('.output-btn');
+    outputBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            outputBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            const mode = btn.getAttribute('data-output');
+            playerState.outputMode = mode;
+            
+            sendMusicControl('output_mode', { mode });
+            
+            // Força sincronização imediata
+            fetchMusicStatus();
+        });
     });
 
     // Formulário de adicionar música
@@ -497,6 +519,9 @@ async function fetchMusicStatus() {
             playerState.position = data.position;
             
             setPlayStateUI(data.is_playing);
+            
+            // Sincroniza áudio local no navegador (streaming)
+            syncBrowserAudio(data);
 
             const track = data.current_track;
             if (track) {
@@ -547,7 +572,7 @@ async function fetchMusicQueue() {
         const response = await fetch(`${API_BASE}/api/player/queue`);
         const data = await response.json();
         if (data.success) {
-            renderQueue(data.queue, data.current_index);
+            renderQueue(data.queue);
         }
     } catch (e) {
         console.error("Erro ao carregar fila:", e);
@@ -614,7 +639,7 @@ function setPlayStateUI(isPlaying) {
     }
 }
 
-function renderQueue(queue, currentIndex) {
+function renderQueue(queue) {
     queueList.innerHTML = '';
     
     if (queue.length === 0) {
@@ -625,9 +650,6 @@ function renderQueue(queue, currentIndex) {
     queue.forEach((track, index) => {
         const li = document.createElement('li');
         li.className = 'queue-item';
-        if (index === currentIndex) {
-            li.classList.add('active');
-        }
 
         const info = document.createElement('div');
         info.className = 'queue-item-info';
@@ -710,5 +732,54 @@ function translateStatus(status) {
         case 'ready': return 'Pronta';
         case 'failed': return 'Falhou';
         default: return status;
+    }
+}
+
+function syncBrowserAudio(data) {
+    const browserAudio = document.getElementById('browser-audio-player');
+    if (!browserAudio) return;
+
+    if (!data || !data.current_track || playerState.outputMode === 'server') {
+        if (!browserAudio.paused) {
+            browserAudio.pause();
+        }
+        return;
+    }
+
+    const track = data.current_track;
+    if (track.status !== 'ready') {
+        if (!browserAudio.paused) {
+            browserAudio.pause();
+        }
+        return;
+    }
+
+    const trackUrl = `${API_BASE}/static/cache/${track.id}.wav`;
+
+    // Sincroniza a origem do áudio
+    if (browserAudio.getAttribute('data-track-id') !== track.id) {
+        browserAudio.src = trackUrl;
+        browserAudio.setAttribute('data-track-id', track.id);
+        browserAudio.load();
+    }
+
+    // Sincroniza volume local com o slider
+    browserAudio.volume = volumeSlider.value / 100.0;
+
+    // Sincroniza estado de reprodução
+    if (data.is_playing) {
+        if (browserAudio.paused) {
+            browserAudio.play().catch(err => console.log("Play blocked by browser autoplay policy:", err));
+        }
+        
+        // Sincroniza o tempo de reprodução (com margem de 1.5s)
+        const diff = Math.abs(browserAudio.currentTime - data.position);
+        if (diff > 1.5) {
+            browserAudio.currentTime = data.position;
+        }
+    } else {
+        if (!browserAudio.paused) {
+            browserAudio.pause();
+        }
     }
 }
