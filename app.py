@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 # Configurações da lâmpada (definidas pelo usuário)
 LAMP_ID = 'eb49c1e95cce655e6ac6mk'
-LAMP_IP = '192.168.1.103'  # IP fixo definido pelo usuário
+LAMP_IP = '192.168.1.101'  # IP fixo definido pelo usuário
 LAMP_KEY = 'E]vaj3/y(s^:gAAO'
 LAMP_VERSION = 3.3
 

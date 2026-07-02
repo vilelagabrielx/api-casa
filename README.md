@@ -1,6 +1,6 @@
 # API Casa - Controle de Iluminação Inteligente
 
-Este é um projeto local extremamente leve e responsivo para controlar a lâmpada inteligente da sua casa (EKAZA Smart Bulb A60 9W) configurada no IP fixo **`192.168.1.103`**.
+Este é um projeto local extremamente leve e responsivo para controlar a lâmpada inteligente da sua casa (EKAZA Smart Bulb A60 9W) configurada no IP fixo **`192.168.1.101`**.
 
 O projeto conta com:
 1. **Uma API em Python** (`http.server` sem dependências complexas de frameworks, ideal para rodar no Termux do Android).
