@@ -166,12 +166,21 @@
             </div>
 
             <!-- Audio Output Selector -->
-            <div class="output-selector">
-                <span>Canal de Áudio:</span>
-                <div class="output-options">
-                    <button class="output-btn active" data-output="server">📢 Servidor</button>
-                    <button class="output-btn" data-output="browser">🎧 Navegador</button>
-                    <button class="output-btn" data-output="both">👥 Ambos</button>
+            <div class="output-selector-new">
+                <div class="server-toggle-container">
+                    <button id="btn-toggle-server-audio" class="server-audio-btn">
+                        <svg class="speaker-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                            <path class="wave-path" d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+                        </svg>
+                        <span>Tocar no Servidor</span>
+                    </button>
+                </div>
+                <div id="server-device-selector-container" class="device-select-container hidden">
+                    <label for="server-device-select" style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.25rem; display: block;">Dispositivo do Servidor:</label>
+                    <select id="server-device-select" class="device-select">
+                        <option value="">Carregando dispositivos...</option>
+                    </select>
                 </div>
             </div>
 

@@ -396,14 +396,26 @@ const clearQueueBtn = document.getElementById('clear-queue-btn');
 const queueList = document.getElementById('queue-list');
 const musicNoteIcon = document.querySelector('.music-note-icon');
 
+// Novos elementos de controle de som do servidor
+const btnToggleServerAudio = document.getElementById('btn-toggle-server-audio');
+const serverDeviceSelectorContainer = document.getElementById('server-device-selector-container');
+const serverDeviceSelect = document.getElementById('server-device-select');
+
 // Estado interno do player no frontend
 let playerState = {
     isPlaying: false,
     duration: 0,
     position: 0,
     isDraggingProgress: false,
-    outputMode: 'server' // 'server', 'browser', 'both'
+    serverMuted: false
 };
+
+// Variáveis para reprodução de áudio bruto (Web Audio API)
+let audioCtx = null;
+let gainNode = null;
+let nextPlayTime = 0;
+let isStreamingActive = false;
+let streamReader = null;
 
 // Modifica setupEventListeners existente para integrar o player
 const originalSetupEventListeners = setupEventListeners;
@@ -459,9 +471,8 @@ setupEventListeners = function() {
     volumeSlider.addEventListener('input', (e) => {
         const val = parseInt(e.target.value);
         volumeVal.textContent = `${val}%`;
-        const browserAudio = document.getElementById('browser-audio-player');
-        if (browserAudio) {
-            browserAudio.volume = val / 100.0;
+        if (gainNode) {
+            gainNode.gain.value = val / 100.0;
         }
     });
 
@@ -470,22 +481,35 @@ setupEventListeners = function() {
         sendMusicControl('volume', { volume: val });
     });
 
-    // Configura botões de saída de áudio
-    const outputBtns = document.querySelectorAll('.output-btn');
-    outputBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            outputBtns.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            
-            const mode = btn.getAttribute('data-output');
-            playerState.outputMode = mode;
-            
-            sendMusicControl('output_mode', { mode });
-            
-            // Força sincronização imediata
-            fetchMusicStatus();
-        });
+    // Configura alternância de som no servidor
+    btnToggleServerAudio.addEventListener('click', () => {
+        const isCurrentlyActive = btnToggleServerAudio.classList.contains('active');
+        const nextMute = isCurrentlyActive; // se está ativo, vai mutar (mute=true)
+        
+        btnToggleServerAudio.classList.toggle('active', !isCurrentlyActive);
+        if (!isCurrentlyActive) {
+            serverDeviceSelectorContainer.classList.remove('hidden');
+        } else {
+            serverDeviceSelectorContainer.classList.add('hidden');
+        }
+        
+        sendMusicControl('toggle_server_audio', { mute: nextMute });
     });
+
+    // Configura seleção de dispositivo no servidor
+    serverDeviceSelect.addEventListener('change', () => {
+        const idx = serverDeviceSelect.value;
+        if (idx !== "") {
+            sendMusicControl('set_device', { device_index: parseInt(idx) });
+        }
+    });
+
+    // Busca dispositivos do servidor e inicia streaming no primeiro clique
+    fetchServerDevices();
+
+    document.body.addEventListener('click', () => {
+        startBrowserStreaming();
+    }, { once: true });
 
     // Formulário de adicionar música
     addTrackBtn.addEventListener('click', addTrackFromInput);
@@ -517,8 +541,18 @@ async function fetchMusicStatus() {
         if (data.success) {
             playerState.isPlaying = data.is_playing;
             playerState.position = data.position;
+            playerState.serverMuted = data.server_mute;
             
             setPlayStateUI(data.is_playing);
+            
+            // Sincroniza estado de mute do servidor no painel
+            if (data.server_mute) {
+                btnToggleServerAudio.classList.remove('active');
+                serverDeviceSelectorContainer.classList.add('hidden');
+            } else {
+                btnToggleServerAudio.classList.add('active');
+                serverDeviceSelectorContainer.classList.remove('hidden');
+            }
             
             // Sincroniza áudio local no navegador (streaming)
             syncBrowserAudio(data);
@@ -736,31 +770,139 @@ function translateStatus(status) {
 }
 
 function syncBrowserAudio(data) {
-    const browserAudio = document.getElementById('browser-audio-player');
-    if (!browserAudio) return;
+    // Agora que usamos Web Audio API e ReadableStream, a rádio sempre toca no navegador.
+    // O syncBrowserAudio serve apenas para atualizar o ganho do volume
+    if (gainNode) {
+        gainNode.gain.value = volumeSlider.value / 100.0;
+    }
+}
 
-    if (!data || playerState.outputMode === 'server') {
-        if (!browserAudio.paused) {
-            browserAudio.pause();
+async function fetchServerDevices() {
+    try {
+        const response = await fetch(`${API_BASE}/api/player/devices`);
+        const data = await response.json();
+        if (data.success) {
+            renderServerDevices(data.devices, data.current_device);
         }
+    } catch (e) {
+        console.error("Erro ao carregar dispositivos do servidor:", e);
+    }
+}
+
+function renderServerDevices(devices, currentDeviceIndex) {
+    serverDeviceSelect.innerHTML = '';
+    
+    if (devices.length === 0) {
+        serverDeviceSelect.innerHTML = '<option value="">Nenhum dispositivo encontrado</option>';
         return;
     }
 
+    devices.forEach(dev => {
+        const option = document.createElement('option');
+        option.value = dev.index;
+        option.textContent = `${dev.name} (${dev.hostapi})`;
+        if (dev.index === currentDeviceIndex || (currentDeviceIndex === null && dev.index === 0)) {
+            option.selected = true;
+        }
+        serverDeviceSelect.appendChild(option);
+    });
+}
+
+async function startBrowserStreaming() {
+    if (isStreamingActive) return;
+    
+    // Inicializa o AudioContext
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+        nextPlayTime = audioCtx.currentTime;
+    }
+    
+    if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+    }
+    
+    if (!gainNode) {
+        gainNode = audioCtx.createGain();
+        gainNode.connect(audioCtx.destination);
+    }
+    
+    gainNode.gain.value = volumeSlider.value / 100.0;
+    isStreamingActive = true;
+    
     const streamUrl = `${API_BASE}/api/player/stream`;
-
-    // Conecta à rádio local ao vivo (stream central do servidor)
-    if (browserAudio.src !== streamUrl) {
-        browserAudio.src = streamUrl;
-        browserAudio.load();
+    console.log("[Stream] Conectando à rádio local via Web Audio API...");
+    
+    try {
+        const response = await fetch(streamUrl);
+        streamReader = response.body.getReader();
+        
+        // Tamanho de chunk esperado: 2048 frames * 2 canais * 2 bytes por sample = 8192 bytes
+        const bufferSize = 8192;
+        let leftover = new Uint8Array(0);
+        
+        while (isStreamingActive) {
+            const { done, value } = await streamReader.read();
+            if (done) {
+                console.log("[Stream] Conexão encerrada pelo servidor.");
+                break;
+            }
+            
+            // Concatena dados novos com o resto
+            let combined = new Uint8Array(leftover.length + value.length);
+            combined.set(leftover);
+            combined.set(value, leftover.length);
+            
+            let offset = 0;
+            while (offset + bufferSize <= combined.length) {
+                const chunk = combined.subarray(offset, offset + bufferSize);
+                playPCMChunk(chunk);
+                offset += bufferSize;
+            }
+            
+            leftover = combined.slice(offset);
+        }
+    } catch (err) {
+        console.error("[Stream] Erro na transmissão da rádio:", err);
+    } finally {
+        isStreamingActive = false;
+        // Tenta reconectar após 2 segundos
+        setTimeout(startBrowserStreaming, 2000);
     }
+}
 
-    // Sincroniza o volume do navegador local com o slider
-    browserAudio.volume = volumeSlider.value / 100.0;
-
-    // Se o navegador estiver pausado, inicia a escuta da stream
-    if (browserAudio.paused) {
-        browserAudio.play().catch(err => {
-            console.log("Autoplay block (aguardando interação do usuário):", err);
-        });
+function playPCMChunk(uint8Chunk) {
+    if (!audioCtx || audioCtx.state === 'suspended') return;
+    
+    const numSamples = uint8Chunk.length / 2; // 16-bit
+    const numFrames = numSamples / 2; // stereo (2 canais)
+    
+    const dataView = new DataView(uint8Chunk.buffer, uint8Chunk.byteOffset, uint8Chunk.byteLength);
+    const leftChannel = new Float32Array(numFrames);
+    const rightChannel = new Float32Array(numFrames);
+    
+    for (let i = 0; i < numFrames; i++) {
+        // Lê PCM 16-bit signed little-endian
+        const leftVal = dataView.getInt16(i * 4, true);
+        const rightVal = dataView.getInt16(i * 4 + 2, true);
+        
+        leftChannel[i] = leftVal / 32768.0;
+        rightChannel[i] = rightVal / 32768.0;
     }
+    
+    const audioBuffer = audioCtx.createBuffer(2, numFrames, 44100);
+    audioBuffer.copyToChannel(leftChannel, 0);
+    audioBuffer.copyToChannel(rightChannel, 1);
+    
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(gainNode);
+    
+    const now = audioCtx.currentTime;
+    // Se o tempo acumulado ficou no passado devido a lag de rede, reseta
+    if (nextPlayTime < now) {
+        nextPlayTime = now + 0.04;
+    }
+    
+    source.start(nextPlayTime);
+    nextPlayTime += audioBuffer.duration;
 }

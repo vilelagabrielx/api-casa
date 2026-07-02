@@ -379,6 +379,23 @@ class AudioPlayer:
                 self.current_frame = end
                 return chunk * self.volume
 
+    def get_devices(self):
+        """Lista os dispositivos de saída de som disponíveis no servidor."""
+        try:
+            devices = sd.query_devices()
+            output_devices = []
+            for idx, dev in enumerate(devices):
+                if dev.get('max_output_channels', 0) > 0:
+                    output_devices.append({
+                        'index': idx,
+                        'name': dev.get('name'),
+                        'hostapi': sd.query_hostapis(dev.get('hostapi', 0))['name']
+                    })
+            return output_devices
+        except Exception as e:
+            print("Erro ao listar dispositivos:", e)
+            return []
+
 
 # Instâncias globais do Player
 queue_manager = QueueManager()
@@ -550,6 +567,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.handle_player_status()
         elif parsed_path.path == '/api/player/stream':
             self.handle_player_stream()
+        elif parsed_path.path == '/api/player/devices':
+            self.handle_player_devices()
         elif parsed_path.path.startswith('/api/'):
             self.send_error_response("Rota da API não encontrada", 404)
         else:
@@ -705,6 +724,12 @@ class BulbHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error_response(str(e))
 
+    def handle_player_devices(self):
+        """Retorna os dispositivos de acesso físico de áudio no servidor."""
+        devs = audio_player.get_devices()
+        current = getattr(audio_player, 'device_index', None)
+        self.send_json_response({"success": True, "devices": devs, "current_device": current})
+
     def handle_player_control(self):
         try:
             content_length = int(self.headers.get('Content-Length', 0))
@@ -745,14 +770,15 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 vol = int(data.get('volume', 80))
                 audio_player.set_volume(vol / 100.0)
 
-            elif action == 'output_mode':
-                mode = data.get('mode', 'server')
-                if mode == 'browser':
-                    audio_player.server_mute = True
-                elif mode == 'server':
-                    audio_player.server_mute = False
-                elif mode == 'both':
-                    audio_player.server_mute = False
+            elif action == 'toggle_server_audio':
+                mute = data.get('mute', False)
+                audio_player.server_mute = mute
+
+            elif action == 'set_device':
+                device_idx = data.get('device_index')
+                if device_idx is not None:
+                    device_idx = int(device_idx)
+                audio_player.start_stream(device_idx)
 
             elif action == 'select':
                 idx = int(data.get('index', 0))

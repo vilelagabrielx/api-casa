@@ -882,35 +882,85 @@ body {
     color: var(--text-secondary);
 }
 
-.output-options {
+.output-selector-new {
+    margin-top: 1.25rem;
+    padding-top: 1rem;
+    border-top: 1px dashed var(--border-color);
     display: flex;
-    background: rgba(0, 0, 0, 0.15);
-    padding: 4px;
-    border-radius: 12px;
-    border: 1px solid var(--border-color);
+    flex-direction: column;
+    gap: 0.75rem;
 }
 
-.output-btn {
-    flex: 1;
-    background: transparent;
-    border: none;
+.server-audio-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
     color: var(--text-secondary);
-    padding: 10px 8px;
+    padding: 12px;
+    border-radius: 12px;
     font-family: var(--font-sans);
-    font-size: 0.85rem;
+    font-size: 0.9rem;
     font-weight: 600;
     cursor: pointer;
-    border-radius: 8px;
     transition: all 0.2s ease;
 }
 
-.output-btn:hover {
+.server-audio-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
     color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.05);
 }
 
-.output-btn.active {
-    background: var(--primary-color);
+.server-audio-btn.active {
+    background: rgba(99, 102, 241, 0.1);
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.15);
+}
+
+.server-audio-btn .speaker-icon {
+    width: 18px;
+    height: 18px;
+}
+
+.server-audio-btn.active .speaker-icon {
+    stroke: var(--primary-color);
+}
+
+/* Esconde as ondas quando inativo */
+.server-audio-btn .wave-path {
+    opacity: 0.2;
+}
+
+.server-audio-btn.active .wave-path {
+    opacity: 1;
+}
+
+.device-select-container {
+    transition: all 0.3s ease;
+}
+
+.device-select-container.hidden {
+    display: none !important;
+}
+
+.device-select {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border-color);
     color: var(--text-primary);
-    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+    padding: 10px 12px;
+    border-radius: 10px;
+    outline: none;
+    font-family: var(--font-sans);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+
+.device-select:focus {
+    border-color: var(--primary-color);
 }
