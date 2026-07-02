@@ -370,3 +370,345 @@ function setLoading(loading) {
 function rgbToHex(r, g, b) {
     return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
 }
+
+// =================================================================
+// LÓGICA DO PLAYER DE MÚSICA (SOM DA SALA)
+// =================================================================
+
+// Elementos do Player no DOM
+const sectionLights = document.getElementById('section-lights');
+const sectionMusic = document.getElementById('section-music');
+const trackTitle = document.getElementById('track-title');
+const trackStatus = document.getElementById('track-status');
+const playPauseBtn = document.getElementById('play-pause-btn');
+const playIcon = document.getElementById('play-icon');
+const pauseIcon = document.getElementById('pause-icon');
+const prevBtn = document.getElementById('prev-btn');
+const nextBtn = document.getElementById('next-btn');
+const progressSlider = document.getElementById('progress-slider');
+const currentTimeText = document.getElementById('current-time');
+const totalTimeText = document.getElementById('total-time');
+const volumeSlider = document.getElementById('volume-slider');
+const volumeVal = document.getElementById('volume-val');
+const ytUrlInput = document.getElementById('yt-url-input');
+const addTrackBtn = document.getElementById('add-track-btn');
+const clearQueueBtn = document.getElementById('clear-queue-btn');
+const queueList = document.getElementById('queue-list');
+const musicNoteIcon = document.querySelector('.music-note-icon');
+
+// Estado interno do player no frontend
+let playerState = {
+    isPlaying: false,
+    duration: 0,
+    position: 0,
+    isDraggingProgress: false
+};
+
+// Modifica setupEventListeners existente para integrar o player
+const originalSetupEventListeners = setupEventListeners;
+setupEventListeners = function() {
+    originalSetupEventListeners(); // Executa configuração da lâmpada
+    
+    // Configura navegação por abas
+    const navTabs = document.querySelectorAll('.nav-tab');
+    navTabs.forEach(tab => {
+        tab.addEventListener('click', (e) => {
+            navTabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const targetNav = tab.getAttribute('data-nav');
+            if (targetNav === 'lights') {
+                sectionLights.style.display = 'block';
+                sectionMusic.style.display = 'none';
+            } else {
+                sectionLights.style.display = 'none';
+                sectionMusic.style.display = 'block';
+                // Atualiza dados de áudio instantaneamente
+                fetchMusicStatus();
+                fetchMusicQueue();
+            }
+        });
+    });
+
+    // Configura botões de controle de reprodução
+    playPauseBtn.addEventListener('click', () => {
+        const action = playerState.isPlaying ? 'pause' : 'play';
+        sendMusicControl(action);
+        // Atualização visual otimista
+        setPlayStateUI(!playerState.isPlaying);
+    });
+
+    prevBtn.addEventListener('click', () => sendMusicControl('prev'));
+    nextBtn.addEventListener('click', () => sendMusicControl('skip'));
+
+    // Barra de progresso interativa (seek)
+    progressSlider.addEventListener('input', (e) => {
+        playerState.isDraggingProgress = true;
+        const val = parseFloat(e.target.value);
+        currentTimeText.textContent = formatTime(val);
+    });
+
+    progressSlider.addEventListener('change', (e) => {
+        const val = parseFloat(e.target.value);
+        sendMusicControl('seek', { position: val });
+        playerState.isDraggingProgress = false;
+    });
+
+    // Slider de Volume
+    volumeSlider.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value);
+        volumeVal.textContent = `${val}%`;
+    });
+
+    volumeSlider.addEventListener('change', (e) => {
+        const val = parseInt(e.target.value);
+        sendMusicControl('volume', { volume: val });
+    });
+
+    // Formulário de adicionar música
+    addTrackBtn.addEventListener('click', addTrackFromInput);
+    ytUrlInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') addTrackFromInput();
+    });
+
+    // Limpar fila
+    clearQueueBtn.addEventListener('click', () => {
+        if (confirm("Deseja realmente limpar toda a fila?")) {
+            sendMusicControl('clear');
+        }
+    });
+
+    // Inicia loops de sincronização com o servidor (polling)
+    setInterval(fetchMusicStatus, 1000);
+    setInterval(fetchMusicQueue, 2000); // Fila atualiza mais lentamente
+};
+
+// Funções de Comunicação da API do Player
+
+async function fetchMusicStatus() {
+    // Evita carregar se o painel de música estiver oculto
+    if (sectionMusic.style.display === 'none') return;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/player/status`);
+        const data = await response.json();
+        if (data.success) {
+            playerState.isPlaying = data.is_playing;
+            playerState.position = data.position;
+            
+            setPlayStateUI(data.is_playing);
+
+            const track = data.current_track;
+            if (track) {
+                trackTitle.textContent = track.title;
+                playerState.duration = track.duration || 0;
+                totalTimeText.textContent = formatTime(playerState.duration);
+                
+                // Atualiza o slider de progresso se o usuário não estiver arrastando
+                if (!playerState.isDraggingProgress) {
+                    progressSlider.max = playerState.duration;
+                    progressSlider.value = playerState.position;
+                    currentTimeText.textContent = formatTime(playerState.position);
+                }
+
+                // Exibe status do download/reprodução
+                if (track.status === 'ready') {
+                    trackStatus.textContent = playerState.isPlaying ? "Reproduzindo áudio local" : "Pausado";
+                } else if (track.status === 'downloading') {
+                    trackStatus.textContent = "Baixando áudio do YouTube...";
+                } else if (track.status === 'pending') {
+                    trackStatus.textContent = "Aguardando download na fila...";
+                } else {
+                    trackStatus.textContent = "Erro ao carregar faixa.";
+                }
+            } else {
+                trackTitle.textContent = "Nenhuma música tocando";
+                trackStatus.textContent = "Fila vazia";
+                progressSlider.value = 0;
+                currentTimeText.textContent = "0:00";
+                totalTimeText.textContent = "0:00";
+            }
+
+            // Volume (apenas atualiza se o usuário não estiver mexendo)
+            if (document.activeElement !== volumeSlider) {
+                volumeSlider.value = data.volume;
+                volumeVal.textContent = `${data.volume}%`;
+            }
+        }
+    } catch (e) {
+        console.error("Erro ao obter status do player:", e);
+    }
+}
+
+async function fetchMusicQueue() {
+    if (sectionMusic.style.display === 'none') return;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/player/queue`);
+        const data = await response.json();
+        if (data.success) {
+            renderQueue(data.queue, data.current_index);
+        }
+    } catch (e) {
+        console.error("Erro ao carregar fila:", e);
+    }
+}
+
+async function sendMusicControl(action, payload = {}) {
+    try {
+        await fetch(`${API_BASE}/api/player/control`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, ...payload })
+        });
+        // Atualiza imediatamente o status para dar feedback ao usuário
+        fetchMusicStatus();
+        fetchMusicQueue();
+    } catch (e) {
+        console.error(`Erro ao enviar controle ${action}:`, e);
+    }
+}
+
+async function addTrackFromInput() {
+    const url = ytUrlInput.value.trim();
+    if (!url) return;
+
+    addTrackBtn.disabled = true;
+    addTrackBtn.textContent = "...";
+
+    try {
+        const response = await fetch(`${API_BASE}/api/player/add`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+        });
+        const data = await response.json();
+        if (data.success) {
+            ytUrlInput.value = '';
+            // Força atualização
+            fetchMusicQueue();
+        } else {
+            alert("Erro ao adicionar link: " + data.error);
+        }
+    } catch (e) {
+        console.error("Erro ao adicionar faixa:", e);
+        alert("Erro de conexão ao adicionar link.");
+    } finally {
+        addTrackBtn.disabled = false;
+        addTrackBtn.textContent = "Adicionar";
+    }
+}
+
+// Funções Auxiliares do UI
+
+function setPlayStateUI(isPlaying) {
+    playerState.isPlaying = isPlaying;
+    if (isPlaying) {
+        playIcon.classList.add('hidden');
+        pauseIcon.classList.remove('hidden');
+        musicNoteIcon.classList.add('playing');
+    } else {
+        playIcon.classList.remove('hidden');
+        pauseIcon.classList.add('hidden');
+        musicNoteIcon.classList.remove('playing');
+    }
+}
+
+function renderQueue(queue, currentIndex) {
+    queueList.innerHTML = '';
+    
+    if (queue.length === 0) {
+        queueList.innerHTML = '<li class="queue-item" style="justify-content: center; color: var(--text-secondary); font-size: 0.85rem;">Fila vazia. Cole um link acima!</li>';
+        return;
+    }
+
+    queue.forEach((track, index) => {
+        const li = document.createElement('li');
+        li.className = 'queue-item';
+        if (index === currentIndex) {
+            li.classList.add('active');
+        }
+
+        const info = document.createElement('div');
+        info.className = 'queue-item-info';
+        info.addEventListener('click', () => {
+            sendMusicControl('select', { index });
+        });
+
+        const title = document.createElement('div');
+        title.className = 'queue-item-title';
+        title.textContent = `${index + 1}. ${track.title}`;
+        info.appendChild(title);
+
+        const statusContainer = document.createElement('div');
+        statusContainer.className = 'queue-item-status';
+        
+        const durationText = document.createTextNode(formatTime(track.duration) + " • ");
+        statusContainer.appendChild(durationText);
+
+        const badge = document.createElement('span');
+        badge.className = `status-badge ${track.status}`;
+        badge.textContent = translateStatus(track.status);
+        statusContainer.appendChild(badge);
+
+        info.appendChild(statusContainer);
+        li.appendChild(info);
+
+        // Ações da fila
+        const actions = document.createElement('div');
+        actions.className = 'queue-item-actions';
+
+        // Botão Subir
+        if (index > 0) {
+            const upBtn = createQueueBtn('<path d="m18 15-6-6-6 6"/>', () => {
+                sendMusicControl('reorder', { from: index, to: index - 1 });
+            });
+            actions.appendChild(upBtn);
+        }
+
+        // Botão Descer
+        if (index < queue.length - 1) {
+            const downBtn = createQueueBtn('<path d="m6 9 6 6 6-6"/>', () => {
+                sendMusicControl('reorder', { from: index, to: index + 1 });
+            });
+            actions.appendChild(downBtn);
+        }
+
+        // Botão Remover
+        const removeBtn = createQueueBtn('<path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6"/>', () => {
+            sendMusicControl('remove', { index });
+        }, 'delete');
+        actions.appendChild(removeBtn);
+
+        li.appendChild(actions);
+        queueList.appendChild(li);
+    });
+}
+
+function createQueueBtn(svgPath, onClick, customClass = '') {
+    const btn = document.createElement('button');
+    btn.className = `queue-action-btn ${customClass}`;
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svgPath}</svg>`;
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation(); // Evita disparar o clique da música
+        onClick();
+    });
+    return btn;
+}
+
+function formatTime(seconds) {
+    if (isNaN(seconds) || seconds === null) return "0:00";
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+}
+
+function translateStatus(status) {
+    switch (status) {
+        case 'pending': return 'Pendente';
+        case 'downloading': return 'Baixando';
+        case 'ready': return 'Pronta';
+        case 'failed': return 'Falhou';
+        default: return status;
+    }
+}
