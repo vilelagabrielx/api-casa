@@ -810,6 +810,8 @@ function renderServerDevices(devices, currentDeviceIndex) {
     });
 }
 
+let activeWS = null;
+
 async function startBrowserStreaming() {
     if (isStreamingActive) return;
     
@@ -831,45 +833,43 @@ async function startBrowserStreaming() {
     gainNode.gain.value = volumeSlider.value / 100.0;
     isStreamingActive = true;
     
-    const streamUrl = `${API_BASE}/api/player/stream`;
-    console.log("[Stream] Conectando à rádio local via Web Audio API...");
+    // Converte a URL da API para o protocolo WebSocket correspondente (ws:// ou wss://)
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = API_BASE.startsWith('http') ? API_BASE.replace(/^https?:\/\//, '') : window.location.host;
+    const wsUrl = `${wsProto}//${host}/api/player/stream`;
     
-    try {
-        const response = await fetch(streamUrl);
-        streamReader = response.body.getReader();
-        
-        // Tamanho de chunk esperado: 2048 frames * 2 canais * 2 bytes por sample = 8192 bytes
-        const bufferSize = 8192;
-        let leftover = new Uint8Array(0);
-        
-        while (isStreamingActive) {
-            const { done, value } = await streamReader.read();
-            if (done) {
-                console.log("[Stream] Conexão encerrada pelo servidor.");
-                break;
-            }
-            
-            // Concatena dados novos com o resto
-            let combined = new Uint8Array(leftover.length + value.length);
-            combined.set(leftover);
-            combined.set(value, leftover.length);
-            
-            let offset = 0;
-            while (offset + bufferSize <= combined.length) {
-                const chunk = combined.subarray(offset, offset + bufferSize);
-                playPCMChunk(chunk);
-                offset += bufferSize;
-            }
-            
-            leftover = combined.slice(offset);
+    console.log("[Stream] Conectando à rádio local via WebSocket:", wsUrl);
+    
+    const ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+    activeWS = ws;
+    
+    ws.onopen = () => {
+        console.log("[Stream] Conectado à stream de áudio WebSocket.");
+    };
+    
+    ws.onmessage = (event) => {
+        if (!isStreamingActive) {
+            ws.close();
+            return;
         }
-    } catch (err) {
-        console.error("[Stream] Erro na transmissão da rádio:", err);
-    } finally {
+        const chunk = new Uint8Array(event.data);
+        if (chunk.length === 8192) {
+            playPCMChunk(chunk);
+        }
+    };
+    
+    ws.onerror = (err) => {
+        console.error("[Stream] Erro no canal de áudio WebSocket:", err);
+    };
+    
+    ws.onclose = () => {
+        console.log("[Stream] Canal de áudio WebSocket desconectado.");
+        activeWS = null;
         isStreamingActive = false;
-        // Tenta reconectar após 2 segundos
+        // Tenta reconectar após 2 segundos se a stream estiver ativa
         setTimeout(startBrowserStreaming, 2000);
-    }
+    };
 }
 
 function playPCMChunk(uint8Chunk) {

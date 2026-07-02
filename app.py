@@ -566,7 +566,10 @@ class BulbHandler(SimpleHTTPRequestHandler):
         elif parsed_path.path == '/api/player/status':
             self.handle_player_status()
         elif parsed_path.path == '/api/player/stream':
-            self.handle_player_stream()
+            if self.headers.get('Upgrade') == 'websocket':
+                self.handle_player_websocket()
+            else:
+                self.send_error_response("Upgrade para WebSocket necessário", 400)
         elif parsed_path.path == '/api/player/devices':
             self.handle_player_devices()
         elif parsed_path.path.startswith('/api/'):
@@ -667,37 +670,53 @@ class BulbHandler(SimpleHTTPRequestHandler):
             "server_mute": audio_player.server_mute
         })
 
-    def handle_player_stream(self):
-        """Mantém uma conexão HTTP persistente transmitindo o WAV contínuo em tempo real."""
-        self.send_response(200)
-        self.send_header('Content-Type', 'audio/wav')
-        self.send_header('Cache-Control', 'no-cache')
-        self.send_header('Connection', 'keep-alive')
-        self.send_header('Pragma', 'no-cache')
-        self.end_headers()
-        
+    def handle_player_websocket(self):
+        """Faz o handshake e mantém uma conexão WebSocket transmitindo frames de áudio em tempo real."""
+        key = self.headers.get('Sec-WebSocket-Key')
+        if not key:
+            self.send_error_response("Missing Sec-WebSocket-Key", 400)
+            return
+
+        import hashlib
+        import base64
         import queue
-        # Fila local para este cliente com limite de buffers acumulados
-        data_queue = queue.Queue(maxsize=40)
+
+        # Realiza o handshake WebSocket conforme o padrão RFC 6455
+        accept_key = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode('utf-8')).digest()).decode('utf-8')
+        
+        self.send_response(101)
+        self.send_header('Upgrade', 'websocket')
+        self.send_header('Connection', 'Upgrade')
+        self.send_header('Sec-WebSocket-Accept', accept_key)
+        self.end_headers()
+
+        # Desativa algoritmo de Nagle (TCP_NODELAY) para envio imediato de bytes de som
+        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+        # Fila local para o cliente
+        data_queue = queue.Queue(maxsize=30)
         
         def write_client(data_bytes):
+            # Cabeçalho de frame binário WebSocket (opcode 2, payload de 8192 bytes = 0x2000)
+            frame_header = b'\x82\x7e\x20\x00'
             try:
-                data_queue.put_nowait(data_bytes)
+                data_queue.put_nowait(frame_header + data_bytes)
             except queue.Full:
-                pass # Descarta frames se a rede estiver lenta para evitar engasgos
+                pass # Descarta pacotes antigos para forçar sincronização
                 
         audio_player.stream_manager.add_client(write_client)
         
         try:
             while write_client in audio_player.stream_manager.clients:
                 try:
-                    # Aguarda dados e envia no chunk HTTP
-                    chunk = data_queue.get(timeout=2.0)
-                    self.wfile.write(chunk)
+                    frame = data_queue.get(timeout=2.0)
+                    self.wfile.write(frame)
                     self.wfile.flush()
                 except queue.Empty:
-                    pass
-        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+                    # Envia WebSocket Ping frame para manter a conexão ativa (opcode 9)
+                    self.wfile.write(b'\x89\x00')
+                    self.wfile.flush()
+        except Exception:
             pass
         finally:
             audio_player.stream_manager.remove_client(write_client)
