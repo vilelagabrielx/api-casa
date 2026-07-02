@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle da Lâmpada - Casa</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <!-- iro.js Color Picker -->
+    <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="background-glow"></div>
+    
+    <div class="container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>Luminária Inteligente</h1>
+            <div id="connection-status" class="status-indicator loading">
+                <span class="status-dot"></span>
+                <span class="status-text">Conectando à lâmpada...</span>
+            </div>
+        </header>
+
+        <!-- Main Card -->
+        <main class="control-card">
+            <!-- Bulb Visualization Area -->
+            <div class="bulb-display">
+                <div class="glow-effect" id="bulb-glow"></div>
+                <svg id="bulb-svg" class="bulb-icon off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <!-- Base socket lines -->
+                    <path d="M15 22h-6" />
+                    <path d="M15 18H9" />
+                    <path d="M13 14H11" />
+                    <!-- Screw threads -->
+                    <path d="M14 18v4a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-4" />
+                    <!-- Glass shape -->
+                    <path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7Z" />
+                    <!-- Filament details -->
+                    <path class="filament" d="M9 10h6" />
+                    <path class="filament" d="M12 10v4" />
+                </svg>
+            </div>
+
+            <!-- Main Power Switch -->
+            <div class="power-control">
+                <button id="power-btn" class="power-button" aria-label="Ligar/Desligar Lâmpada">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+                        <line x1="12" y1="2" x2="12" y2="12" />
+                    </svg>
+                </button>
+                <span class="power-label" id="power-label">Desligada</span>
+            </div>
+
+            <!-- Mode Selector Tabs -->
+            <div class="mode-tabs">
+                <button class="tab-btn active" data-tab="color">Cores</button>
+                <button class="tab-btn" data-tab="white">Luz Branca</button>
+            </div>
+
+            <!-- Control Panels -->
+            <div class="panel-content">
+                <!-- Color Picker Panel -->
+                <div class="panel active" id="panel-color">
+                    <div class="picker-wrapper">
+                        <div id="picker"></div>
+                    </div>
+                </div>
+
+                <!-- White Light Panel -->
+                <div class="panel" id="panel-white">
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span>Brilho</span>
+                            <span id="brightness-val">100%</span>
+                        </div>
+                        <div class="slider-control">
+                            <input type="range" id="slider-brightness" min="10" max="1000" value="1000" class="custom-range">
+                        </div>
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span>Temperatura de Cor</span>
+                            <span id="temp-val">Neutro</span>
+                        </div>
+                        <div class="slider-control">
+                            <input type="range" id="slider-temp" min="10" max="1000" value="500" class="custom-range temp-gradient">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+        
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>Servidor local no Termux &bull; Lâmpada IP: 192.168.1.103</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
