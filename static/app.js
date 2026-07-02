@@ -501,7 +501,7 @@ setupEventListeners = function() {
     });
 
     // Inicia loops de sincronização com o servidor (polling)
-    setInterval(fetchMusicStatus, 1000);
+    setInterval(fetchMusicStatus, 300); // Polling rápido para manter áudio local sincronizado
     setInterval(fetchMusicQueue, 2000); // Fila atualiza mais lentamente
 };
 
@@ -743,6 +743,7 @@ function syncBrowserAudio(data) {
         if (!browserAudio.paused) {
             browserAudio.pause();
         }
+        browserAudio.playbackRate = 1.0;
         return;
     }
 
@@ -751,6 +752,7 @@ function syncBrowserAudio(data) {
         if (!browserAudio.paused) {
             browserAudio.pause();
         }
+        browserAudio.playbackRate = 1.0;
         return;
     }
 
@@ -761,6 +763,8 @@ function syncBrowserAudio(data) {
         browserAudio.src = trackUrl;
         browserAudio.setAttribute('data-track-id', track.id);
         browserAudio.load();
+        // Ajusta imediatamente para a posição do servidor ao carregar
+        browserAudio.currentTime = data.position;
     }
 
     // Sincroniza volume local com o slider
@@ -769,17 +773,35 @@ function syncBrowserAudio(data) {
     // Sincroniza estado de reprodução
     if (data.is_playing) {
         if (browserAudio.paused) {
+            browserAudio.currentTime = data.position; // Sincroniza antes do play
             browserAudio.play().catch(err => console.log("Play blocked by browser autoplay policy:", err));
         }
         
-        // Sincroniza o tempo de reprodução (com margem de 1.5s)
-        const diff = Math.abs(browserAudio.currentTime - data.position);
-        if (diff > 1.5) {
+        // Sincronização Suave baseada em Phase-Locked Loop (PLL)
+        const diff = browserAudio.currentTime - data.position; // positivo se navegador estiver adiantado
+        const absDiff = Math.abs(diff);
+
+        if (absDiff > 1.5) {
+            // Desvio grande: faz busca direta (hard sync)
             browserAudio.currentTime = data.position;
+            browserAudio.playbackRate = 1.0;
+        } else if (absDiff > 0.08) {
+            // Desvio perceptível (>80ms): ajusta playbackRate de forma imperceptível (micro-correção)
+            if (diff > 0) {
+                // Navegador adiantado -> reduz velocidade (96%)
+                browserAudio.playbackRate = 0.96;
+            } else {
+                // Navegador atrasado -> aumenta velocidade (1.04%)
+                browserAudio.playbackRate = 1.04;
+            }
+        } else {
+            // Em sincronia estreita (desvio < 80ms) -> velocidade normal
+            browserAudio.playbackRate = 1.0;
         }
     } else {
         if (!browserAudio.paused) {
             browserAudio.pause();
         }
+        browserAudio.playbackRate = 1.0;
     }
 }
