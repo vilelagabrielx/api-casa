@@ -489,7 +489,7 @@ def player_supervisor():
                     audio_player.stop()
 
 def master_audio_loop():
-    """Clock central de áudio que lê frames e distribui para alto-falantes locais e streaming HTTP."""
+    """Clock central de áudio que lê frames e distribui para alto-falantes locais e streaming WebSocket."""
     blocksize = 2048
     block_duration = blocksize / 44100.0
     
@@ -499,6 +499,17 @@ def master_audio_loop():
     while True:
         start_time = time.time()
         
+        # Se o player estiver pausado ou sem música, dorme e não envia nada (silêncio absoluto)
+        if not audio_player.is_playing or audio_player.data is None:
+            time.sleep(0.1)
+            # Envia pequeno sinal de ping físico para manter a placa de som local acordada
+            if not audio_player.server_mute and audio_player.stream:
+                try:
+                    audio_player.stream.write(np.zeros((512, 2), dtype='float32'))
+                except Exception:
+                    pass
+            continue
+            
         # Lê o próximo bloco de áudio do player
         chunk = audio_player.get_next_chunk(blocksize)
         
@@ -506,20 +517,24 @@ def master_audio_loop():
         clipped_chunk = np.clip(chunk, -1.0, 1.0)
         pcm_bytes = (clipped_chunk * 32767.0).astype(np.int16).tobytes()
         
-        # Distribui para todos os clientes conectados na rede local
+        # Distribui para todos os clientes conectados via WebSocket
         audio_player.stream_manager.broadcast(pcm_bytes)
         
         # Toca localmente no Termux se não estiver mutado
-        if not audio_player.server_mute and audio_player.stream:
+        if audio_player.stream:
             try:
-                audio_player.stream.write(chunk.astype('float32'))
+                if audio_player.server_mute:
+                    # Escreve silêncio no hardware apenas para usar o clock da placa como temporizador de rede
+                    audio_player.stream.write(np.zeros_like(chunk, dtype='float32'))
+                else:
+                    audio_player.stream.write(chunk.astype('float32'))
             except Exception as e:
                 # Se falhar, faz o throttling por sleep
                 elapsed = time.time() - start_time
                 sleep_time = max(0, block_duration - elapsed)
                 time.sleep(sleep_time)
         else:
-            # Throttling por sleep (servidor mutado)
+            # Throttling por sleep (se sounddevice não inicializou)
             elapsed = time.time() - start_time
             sleep_time = max(0, block_duration - elapsed)
             time.sleep(sleep_time)
