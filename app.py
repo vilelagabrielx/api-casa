@@ -566,7 +566,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
         elif parsed_path.path == '/api/player/status':
             self.handle_player_status()
         elif parsed_path.path == '/api/player/stream':
-            if self.headers.get('Upgrade') == 'websocket':
+            if self.headers.get('Upgrade', '').lower() == 'websocket':
                 self.handle_player_websocket()
             else:
                 self.send_error_response("Upgrade para WebSocket necessário", 400)
