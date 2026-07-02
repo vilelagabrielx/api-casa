@@ -875,20 +875,17 @@ async function startBrowserStreaming() {
 function playPCMChunk(uint8Chunk) {
     if (!audioCtx || audioCtx.state === 'suspended') return;
     
-    const numSamples = uint8Chunk.length / 2; // 16-bit
+    // Converte os bytes 16-bit PCM (little-endian) para float32 usando Int16Array direto
+    const pcm16 = new Int16Array(uint8Chunk.buffer, uint8Chunk.byteOffset, uint8Chunk.length / 2);
+    const numSamples = pcm16.length;
     const numFrames = numSamples / 2; // stereo (2 canais)
     
-    const dataView = new DataView(uint8Chunk.buffer, uint8Chunk.byteOffset, uint8Chunk.byteLength);
     const leftChannel = new Float32Array(numFrames);
     const rightChannel = new Float32Array(numFrames);
     
     for (let i = 0; i < numFrames; i++) {
-        // Lê PCM 16-bit signed little-endian
-        const leftVal = dataView.getInt16(i * 4, true);
-        const rightVal = dataView.getInt16(i * 4 + 2, true);
-        
-        leftChannel[i] = leftVal / 32768.0;
-        rightChannel[i] = rightVal / 32768.0;
+        leftChannel[i] = pcm16[i * 2] / 32768.0;
+        rightChannel[i] = pcm16[i * 2 + 1] / 32768.0;
     }
     
     const audioBuffer = audioCtx.createBuffer(2, numFrames, 44100);
@@ -900,9 +897,9 @@ function playPCMChunk(uint8Chunk) {
     source.connect(gainNode);
     
     const now = audioCtx.currentTime;
-    // Se o tempo acumulado ficou no passado devido a lag de rede, reseta
-    if (nextPlayTime < now) {
-        nextPlayTime = now + 0.04;
+    // Se a linha do tempo acumulada estiver muito no passado (atraso de rede > 150ms), reseta a margem
+    if (nextPlayTime < now - 0.15) {
+        nextPlayTime = now + 0.15; // 150ms de jitter buffer inicial para áudio contínuo sem estalos
     }
     
     source.start(nextPlayTime);
