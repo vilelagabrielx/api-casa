@@ -8,7 +8,7 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 import yt_dlp
-from http.server import SimpleHTTPRequestHandler, HTTPServer
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 # Configurações da lâmpada (definidas pelo usuário)
@@ -800,7 +800,7 @@ if __name__ == "__main__":
             print("Erro ao limpar static/cache inicial:", e)
     os.makedirs('static/cache', exist_ok=True)
 
-    server = HTTPServer(("0.0.0.0", PORT), BulbHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), BulbHandler)
     print(f"API e Website rodando em http://localhost:{PORT}")
     print(f"Lâmpada configurada para o IP: {LAMP_IP}")
     try:
