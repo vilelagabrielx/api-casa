@@ -351,7 +351,7 @@ class AudioPlayer:
             return 0.0
 
     def get_next_chunk(self, blocksize):
-        """Lê o próximo bloco de áudio de forma thread-safe e converte para Stereo se necessário."""
+        """Lê o próximo bloco de áudio de forma thread-safe e garante formato stereo 44100Hz."""
         with self.lock:
             if not self.is_playing or self.data is None:
                 return np.zeros((blocksize, 2), dtype='float32')
@@ -359,25 +359,37 @@ class AudioPlayer:
             start = self.current_frame
             end = start + blocksize
 
+            # Coleta o chunk cru de dados do arquivo
             if start >= len(self.data):
                 self.is_playing = False
                 return np.zeros((blocksize, 2), dtype='float32')
 
             if end > len(self.data):
                 chunk = self.data[start:]
-                if self.channels == 1:
-                    chunk = np.column_stack((chunk, chunk))
-                out = np.zeros((blocksize, 2), dtype='float32')
-                out[:len(chunk)] = chunk * self.volume
                 self.current_frame = len(self.data)
                 self.is_playing = False
-                return out
             else:
                 chunk = self.data[start:end]
-                if self.channels == 1:
-                    chunk = np.column_stack((chunk, chunk))
                 self.current_frame = end
-                return chunk * self.volume
+
+            # Garante que o formato de canais seja transformado em 2D Stereo
+            if len(chunk.shape) == 1:
+                # Caso o array seja 1D (Mono puro)
+                chunk = np.column_stack((chunk, chunk))
+            elif chunk.shape[1] == 1:
+                # Caso o array seja 2D de apenas 1 canal (ex: (N, 1))
+                chunk = np.column_stack((chunk[:, 0], chunk[:, 0]))
+            elif chunk.shape[1] > 2:
+                # Caso seja multi-canal (ex: 5.1), reduz para stereo pegando os 2 primeiros canais
+                chunk = chunk[:, :2]
+
+            # Se o pedaço for menor que o blocksize (fim do arquivo), preenche com zeros
+            if len(chunk) < blocksize:
+                out = np.zeros((blocksize, 2), dtype='float32')
+                out[:len(chunk)] = chunk
+                chunk = out
+
+            return chunk * self.volume
 
     def get_devices(self):
         """Lista os dispositivos de saída de som disponíveis no servidor."""
@@ -737,6 +749,12 @@ class BulbHandler(SimpleHTTPRequestHandler):
         data_queue = queue.Queue(maxsize=30)
         
         def write_client(data_bytes):
+            # Garante que o payload tenha exatamente 8192 bytes
+            if len(data_bytes) != 8192:
+                if len(data_bytes) < 8192:
+                    data_bytes = data_bytes + b'\x00' * (8192 - len(data_bytes))
+                else:
+                    data_bytes = data_bytes[:8192]
             # Cabeçalho de frame binário WebSocket (opcode 2, payload de 8192 bytes = 0x2000)
             frame_header = b'\x82\x7e\x20\x00'
             try:
