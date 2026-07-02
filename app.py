@@ -49,6 +49,15 @@ def get_lamp():
 # GERENCIADOR DE FILA (PLAYLIST) E DOWNLOADS
 # =================================================================
 
+def delete_track_file(track):
+    """Remove o arquivo WAV físico associado a uma música para liberar espaço no servidor."""
+    if track and track.get('file_path') and os.path.exists(track['file_path']):
+        try:
+            os.remove(track['file_path'])
+            print(f"[Limpeza] Removido arquivo de cache: {track['file_path']}")
+        except Exception as e:
+            print(f"Erro ao deletar {track['file_path']}: {e}")
+
 class QueueManager:
     def __init__(self):
         self.queue = []
@@ -125,9 +134,13 @@ class QueueManager:
             return None
 
     def pop_next_track(self):
-        """Pula para a próxima música e guarda a atual no histórico."""
+        """Pula para a próxima música e limpa o arquivo físico da atual."""
         with self.lock:
             if self.current_track:
+                delete_track_file(self.current_track)
+                # Reseta o status para pending antes de salvar no histórico para caso o usuário volte
+                self.current_track['status'] = 'pending'
+                self.current_track['file_path'] = None
                 self.history.append(self.current_track)
                 if len(self.history) > 20:
                     self.history.pop(0)
@@ -139,21 +152,29 @@ class QueueManager:
                 return None
 
     def prev_track(self):
-        """Recupera a última música tocada do histórico e devolve a atual para a fila."""
+        """Volta para a música anterior limpando a atual."""
         with self.lock:
             if len(self.history) > 0:
                 if self.current_track:
+                    delete_track_file(self.current_track)
+                    self.current_track['status'] = 'pending'
+                    self.current_track['file_path'] = None
                     self.queue.insert(0, self.current_track)
                 self.current_track = self.history.pop()
                 return self.current_track
             return None
 
     def select_track(self, index):
-        """Seleciona uma música específica da fila por índice, tocando-a imediatamente."""
+        """Pula para uma música da fila limpando a atual."""
         with self.lock:
             if 0 <= index < len(self.queue):
                 if self.current_track:
+                    delete_track_file(self.current_track)
+                    self.current_track['status'] = 'pending'
+                    self.current_track['file_path'] = None
                     self.history.append(self.current_track)
+                    if len(self.history) > 20:
+                        self.history.pop(0)
                 self.current_track = self.queue.pop(index)
                 return self.current_track
             return None
@@ -161,11 +182,17 @@ class QueueManager:
     def remove_track(self, index):
         with self.lock:
             if 0 <= index < len(self.queue):
-                return self.queue.pop(index)
+                track = self.queue.pop(index)
+                delete_track_file(track)
+                return track
             return None
 
     def clear_queue(self):
         with self.lock:
+            for track in self.queue:
+                delete_track_file(track)
+            if self.current_track:
+                delete_track_file(self.current_track)
             self.queue = []
             self.current_track = None
             self.history = []
@@ -644,6 +671,16 @@ class BulbHandler(SimpleHTTPRequestHandler):
         self.send_json_response({"success": False, "error": message}, code)
 
 if __name__ == "__main__":
+    # Limpa cache antigo ao iniciar para evitar resíduos de execuções anteriores
+    import shutil
+    if os.path.exists('static/cache'):
+        try:
+            shutil.rmtree('static/cache')
+            print("[Limpeza] Pasta static/cache limpa na inicialização.")
+        except Exception as e:
+            print("Erro ao limpar static/cache inicial:", e)
+    os.makedirs('static/cache', exist_ok=True)
+
     server = HTTPServer(("0.0.0.0", PORT), BulbHandler)
     print(f"API e Website rodando em http://localhost:{PORT}")
     print(f"Lâmpada configurada para o IP: {LAMP_IP}")
