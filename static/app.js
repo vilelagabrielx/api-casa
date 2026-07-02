@@ -401,6 +401,8 @@ const musicNoteIcon = document.querySelector('.music-note-icon');
 const btnToggleServerAudio = document.getElementById('btn-toggle-server-audio');
 const serverDeviceSelectorContainer = document.getElementById('server-device-selector-container');
 const serverDeviceSelect = document.getElementById('server-device-select');
+const syncOffsetSlider = document.getElementById('sync-offset-slider');
+const syncOffsetVal = document.getElementById('sync-offset-val');
 
 // Estado interno do player no frontend
 let playerState = {
@@ -408,7 +410,8 @@ let playerState = {
     duration: 0,
     position: 0,
     isDraggingProgress: false,
-    serverMuted: false
+    serverMuted: false,
+    syncOffset: parseInt(localStorage.getItem('sync_offset') || '0')
 };
 
 // Variáveis para reprodução de áudio bruto (Web Audio API)
@@ -481,6 +484,17 @@ setupEventListeners = function() {
     volumeSlider.addEventListener('change', (e) => {
         const val = parseInt(e.target.value);
         sendMusicControl('volume', { volume: val });
+    });
+
+    // Configura calibrador de sincronização de áudio (eco)
+    syncOffsetSlider.value = playerState.syncOffset;
+    syncOffsetVal.textContent = (playerState.syncOffset >= 0 ? '+' : '') + playerState.syncOffset + 'ms';
+
+    syncOffsetSlider.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value);
+        playerState.syncOffset = val;
+        syncOffsetVal.textContent = (val >= 0 ? '+' : '') + val + 'ms';
+        localStorage.setItem('sync_offset', val.toString());
     });
 
     // Configura alternância de som no servidor
@@ -898,9 +912,10 @@ function playPCMChunk(arrayBuffer) {
     
     const now = audioCtx.currentTime;
     // Sob sob sob underflow de rede (nextPlayTime ficou atrás do tempo atual de reprodução),
-    // reinicializamos o jitter buffer em 150ms para garantir fluxo contínuo.
+    // reinicializamos o jitter buffer com o offset de calibração personalizado do usuário.
     if (nextPlayTime < now) {
-        nextPlayTime = now + 0.05; // 50ms de jitter buffer para sincronia ideal sem eco
+        const calibration = playerState.syncOffset / 1000.0;
+        nextPlayTime = now + Math.max(0.01, 0.05 + calibration); // 50ms base + calibração
     }
     
     source.start(nextPlayTime);

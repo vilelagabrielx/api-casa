@@ -637,6 +637,35 @@ body {
     text-align: right;
 }
 
+/* Sync Calibration Slider */
+.sync-calibration-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    background: rgba(0, 0, 0, 0.15);
+    padding: 10px 16px;
+    border-radius: 14px;
+    border: 1px solid var(--border-color);
+}
+
+.sync-icon {
+    width: 18px;
+    height: 18px;
+    color: var(--text-secondary);
+}
+
+.sync-slider {
+    flex: 1;
+}
+
+#sync-offset-val {
+    font-size: 0.85rem;
+    font-weight: 600;
+    min-width: 48px;
+    text-align: right;
+}
+
 .divider {
     width: 100%;
     border: none;
