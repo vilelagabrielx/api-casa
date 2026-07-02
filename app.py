@@ -488,26 +488,50 @@ def player_supervisor():
                 else:
                     audio_player.stop()
 
+import queue
+
+# Fila e worker para desacoplar a escrita física de som local (sounddevice) do loop de rede
+local_playback_queue = queue.Queue(maxsize=15)
+
+def local_playback_worker():
+    """Consome blocos de áudio da fila e escreve no sounddevice sem bloquear a rede."""
+    while True:
+        try:
+            chunk = local_playback_queue.get(timeout=1.0)
+            if audio_player.stream:
+                try:
+                    # Só escreve se não estiver mutado no servidor
+                    if not audio_player.server_mute:
+                        audio_player.stream.write(chunk.astype('float32'))
+                except Exception:
+                    pass
+        except queue.Empty:
+            pass
+
+# Inicia o worker de som local em background
+threading.Thread(target=local_playback_worker, daemon=True).start()
+
 def master_audio_loop():
-    """Clock central de áudio que lê frames e distribui para alto-falantes locais e streaming WebSocket."""
+    """Clock central de áudio de ultra-precisão temporal (microssegundos) para rede e som local."""
     blocksize = 2048
     block_duration = blocksize / 44100.0
     
     # Inicializa saída local do Termux
     audio_player.start_stream()
     
+    next_frame_time = time.time()
+    
     while True:
-        start_time = time.time()
-        
-        # Se o player estiver pausado ou sem música, dorme e não envia nada (silêncio absoluto)
+        # Se o player estiver pausado ou sem música, limpa a fila e dorme
         if not audio_player.is_playing or audio_player.data is None:
-            time.sleep(0.1)
-            # Envia pequeno sinal de ping físico para manter a placa de som local acordada
-            if not audio_player.server_mute and audio_player.stream:
+            # Limpa fila local
+            while not local_playback_queue.empty():
                 try:
-                    audio_player.stream.write(np.zeros((512, 2), dtype='float32'))
-                except Exception:
-                    pass
+                    local_playback_queue.get_nowait()
+                except queue.Empty:
+                    break
+            time.sleep(0.1)
+            next_frame_time = time.time()
             continue
             
         # Lê o próximo bloco de áudio do player
@@ -517,27 +541,28 @@ def master_audio_loop():
         clipped_chunk = np.clip(chunk, -1.0, 1.0)
         pcm_bytes = (clipped_chunk * 32767.0).astype(np.int16).tobytes()
         
-        # Distribui para todos os clientes conectados via WebSocket
+        # Distribui para todos os clientes conectados via WebSocket imediatamente (sem travar)
         audio_player.stream_manager.broadcast(pcm_bytes)
         
-        # Toca localmente no Termux se não estiver mutado
-        if audio_player.stream:
+        # Adiciona na fila de reprodução local (sounddevice) sem bloquear o loop principal de rede
+        if not audio_player.server_mute:
             try:
-                if audio_player.server_mute:
-                    # Escreve silêncio no hardware apenas para usar o clock da placa como temporizador de rede
-                    audio_player.stream.write(np.zeros_like(chunk, dtype='float32'))
-                else:
-                    audio_player.stream.write(chunk.astype('float32'))
-            except Exception as e:
-                # Se falhar, faz o throttling por sleep
-                elapsed = time.time() - start_time
-                sleep_time = max(0, block_duration - elapsed)
-                time.sleep(sleep_time)
-        else:
-            # Throttling por sleep (se sounddevice não inicializou)
-            elapsed = time.time() - start_time
-            sleep_time = max(0, block_duration - elapsed)
-            time.sleep(sleep_time)
+                local_playback_queue.put_nowait(chunk)
+            except queue.Full:
+                pass # Descarta pacote no servidor se o hardware de som dele atrasar
+                
+        # Temporizador inteligente com compensação de drift acumulado e busy-wait para precisão absoluta (microsegundos)
+        next_frame_time += block_duration
+        now = time.time()
+        sleep_time = next_frame_time - now
+        
+        # Dorme a maior parte do tempo para poupar CPU
+        if sleep_time > 0.004:
+            time.sleep(sleep_time - 0.004)
+            
+        # Busy-wait preciso nos últimos 4 milissegundos
+        while time.time() < next_frame_time:
+            pass
 
 
 # Inicializa as threads
