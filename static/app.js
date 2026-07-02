@@ -739,69 +739,28 @@ function syncBrowserAudio(data) {
     const browserAudio = document.getElementById('browser-audio-player');
     if (!browserAudio) return;
 
-    if (!data || !data.current_track || playerState.outputMode === 'server') {
+    if (!data || playerState.outputMode === 'server') {
         if (!browserAudio.paused) {
             browserAudio.pause();
         }
-        browserAudio.playbackRate = 1.0;
         return;
     }
 
-    const track = data.current_track;
-    if (track.status !== 'ready') {
-        if (!browserAudio.paused) {
-            browserAudio.pause();
-        }
-        browserAudio.playbackRate = 1.0;
-        return;
-    }
+    const streamUrl = `${API_BASE}/api/player/stream`;
 
-    const trackUrl = `${API_BASE}/static/cache/${track.id}.wav`;
-
-    // Sincroniza a origem do áudio
-    if (browserAudio.getAttribute('data-track-id') !== track.id) {
-        browserAudio.src = trackUrl;
-        browserAudio.setAttribute('data-track-id', track.id);
+    // Conecta à rádio local ao vivo (stream central do servidor)
+    if (browserAudio.src !== streamUrl) {
+        browserAudio.src = streamUrl;
         browserAudio.load();
-        // Ajusta imediatamente para a posição do servidor ao carregar
-        browserAudio.currentTime = data.position;
     }
 
-    // Sincroniza volume local com o slider
+    // Sincroniza o volume do navegador local com o slider
     browserAudio.volume = volumeSlider.value / 100.0;
 
-    // Sincroniza estado de reprodução
-    if (data.is_playing) {
-        if (browserAudio.paused) {
-            browserAudio.currentTime = data.position; // Sincroniza antes do play
-            browserAudio.play().catch(err => console.log("Play blocked by browser autoplay policy:", err));
-        }
-        
-        // Sincronização Suave baseada em Phase-Locked Loop (PLL)
-        const diff = browserAudio.currentTime - data.position; // positivo se navegador estiver adiantado
-        const absDiff = Math.abs(diff);
-
-        if (absDiff > 1.5) {
-            // Desvio grande: faz busca direta (hard sync)
-            browserAudio.currentTime = data.position;
-            browserAudio.playbackRate = 1.0;
-        } else if (absDiff > 0.08) {
-            // Desvio perceptível (>80ms): ajusta playbackRate de forma imperceptível (micro-correção)
-            if (diff > 0) {
-                // Navegador adiantado -> reduz velocidade (96%)
-                browserAudio.playbackRate = 0.96;
-            } else {
-                // Navegador atrasado -> aumenta velocidade (1.04%)
-                browserAudio.playbackRate = 1.04;
-            }
-        } else {
-            // Em sincronia estreita (desvio < 80ms) -> velocidade normal
-            browserAudio.playbackRate = 1.0;
-        }
-    } else {
-        if (!browserAudio.paused) {
-            browserAudio.pause();
-        }
-        browserAudio.playbackRate = 1.0;
+    // Se o navegador estiver pausado, inicia a escuta da stream
+    if (browserAudio.paused) {
+        browserAudio.play().catch(err => {
+            console.log("Autoplay block (aguardando interação do usuário):", err);
+        });
     }
 }

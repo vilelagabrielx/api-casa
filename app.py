@@ -205,21 +205,87 @@ class QueueManager:
 
 
 # =================================================================
-# REPRODUTOR DE ÁUDIO (SOUNDDEVICE)
+# REPRODUTOR E TRANSMISSOR DE ÁUDIO (SOUNDDEVICE & NETWORK STREAM)
 # =================================================================
+
+def get_wav_header(sample_rate, channels, bits_per_sample=16):
+    """Gera um cabeçalho WAV estático de 2GB (fluxo contínuo) para o navegador."""
+    data_size = 0x7FFFFFFF
+    file_size = data_size + 36
+    header = bytearray(44)
+    header[0:4] = b'RIFF'
+    header[4:8] = file_size.to_bytes(4, 'little')
+    header[8:12] = b'WAVE'
+    header[12:16] = b'fmt '
+    header[16:20] = (16).to_bytes(4, 'little') # subchunk1 size (16 para PCM)
+    header[20:22] = (1).to_bytes(2, 'little')  # formato (1 para PCM)
+    header[22:24] = channels.to_bytes(2, 'little')
+    header[24:28] = sample_rate.to_bytes(4, 'little')
+    header[28:32] = (sample_rate * channels * (bits_per_sample // 8)).to_bytes(4, 'little')
+    header[32:34] = (channels * (bits_per_sample // 8)).to_bytes(2, 'little')
+    header[34:36] = bits_per_sample.to_bytes(2, 'little')
+    header[36:40] = b'data'
+    header[40:44] = data_size.to_bytes(4, 'little')
+    return bytes(header)
+
+class StreamManager:
+    def __init__(self):
+        self.clients = set()
+        self.lock = threading.Lock()
+
+    def add_client(self, client_writer):
+        with self.lock:
+            # Envia o cabeçalho WAV inicial ao novo cliente
+            header = get_wav_header(44100, 2, 16)
+            try:
+                client_writer(header)
+                self.clients.add(client_writer)
+                print(f"[Stream] Novo cliente conectado. Total: {len(self.clients)}")
+            except Exception as e:
+                print("Erro ao adicionar cliente ao stream:", e)
+
+    def remove_client(self, client_writer):
+        with self.lock:
+            if client_writer in self.clients:
+                self.clients.remove(client_writer)
+                print(f"[Stream] Cliente desconectado. Total: {len(self.clients)}")
+
+    def broadcast(self, data_bytes):
+        with self.lock:
+            disconnected = []
+            for client in self.clients:
+                try:
+                    client(data_bytes)
+                except Exception:
+                    disconnected.append(client)
+            for client in disconnected:
+                if client in self.clients:
+                    self.clients.remove(client)
 
 class AudioPlayer:
     def __init__(self):
-        self.stream = None
         self.data = None
         self.sr = 44100
-        self.channels = 1
+        self.channels = 2
         self.current_frame = 0
         self.is_playing = False
         self.volume = 0.8  # Volume de 0.0 a 1.0
         self.current_track_id = None
-        self.server_mute = False  # Modo apenas navegador muta o som no servidor
+        self.server_mute = False
+        self.stream = None
+        self.stream_manager = StreamManager()
         self.lock = threading.Lock()
+
+    def start_stream(self):
+        try:
+            self.stream = sd.OutputStream(
+                samplerate=44100,
+                channels=2,
+                dtype='float32'
+            )
+            self.stream.start()
+        except Exception as e:
+            print("Erro ao iniciar sounddevice local:", e)
 
     def play_track(self, track):
         """Carrega e reproduz uma música pronta (status ready)."""
@@ -228,9 +294,9 @@ class AudioPlayer:
             print(f"Erro: Arquivo local não encontrado para {track['title']}")
             return False
 
-        print(f"Carregando áudio: {file_path}")
+        print(f"Carregando áudio master: {file_path}")
         try:
-            # Lê o WAV do cache
+            # Lê o WAV do cache (já salvo em 44100Hz Stereo)
             data, sr = sf.read(file_path)
             
             with self.lock:
@@ -240,62 +306,12 @@ class AudioPlayer:
                 self.current_frame = 0
                 self.current_track_id = track['id']
                 self.is_playing = True
-                
-                if self.stream:
-                    self.stream.stop()
-                    self.stream.close()
-
-                # Inicializa stream com callback de baixa latência
-                self.stream = sd.OutputStream(
-                    samplerate=self.sr,
-                    channels=self.channels,
-                    callback=self._audio_callback,
-                    blocksize=2048,
-                    dtype='float32'
-                )
-                self.stream.start()
-            print(f"Tocando: {track['title']}")
+            
+            print(f"Tocando master clock: {track['title']}")
             return True
         except Exception as e:
-            print(f"Erro ao iniciar reprodução: {e}")
+            print(f"Erro ao iniciar reprodução master: {e}")
             return False
-
-    def _audio_callback(self, outdata, frames, time_info, status):
-        """Callback executado pela thread do PortAudio para preencher o buffer de saída."""
-        if not self.is_playing or self.data is None:
-            outdata.fill(0)
-            return
-
-        if self.server_mute:
-            # Mantém avanço e encerramento lógico em silêncio
-            with self.lock:
-                self.current_frame = min(self.current_frame + frames, len(self.data))
-                if self.current_frame >= len(self.data):
-                    self.is_playing = False
-            outdata.fill(0)
-            return
-
-        with self.lock:
-            start = self.current_frame
-            end = start + frames
-            
-            if start >= len(self.data):
-                # Fim da música
-                outdata.fill(0)
-                self.is_playing = False
-                return
-                
-            if end > len(self.data):
-                # Escreve o restante da música e preenche com silêncio
-                chunk = self.data[start:]
-                outdata[:len(chunk)] = chunk * self.volume
-                outdata[len(chunk):].fill(0)
-                self.current_frame = len(self.data)
-                self.is_playing = False
-            else:
-                # Escreve um bloco normal multiplicado pelo volume
-                outdata[:] = self.data[start:end] * self.volume
-                self.current_frame = end
 
     def pause(self):
         with self.lock:
@@ -325,10 +341,6 @@ class AudioPlayer:
             self.is_playing = False
             self.current_frame = 0
             self.data = None
-            if self.stream:
-                self.stream.stop()
-                self.stream.close()
-                self.stream = None
             self.current_track_id = None
 
     def get_position(self):
@@ -337,6 +349,35 @@ class AudioPlayer:
             if self.data is not None:
                 return self.current_frame / self.sr
             return 0.0
+
+    def get_next_chunk(self, blocksize):
+        """Lê o próximo bloco de áudio de forma thread-safe e converte para Stereo se necessário."""
+        with self.lock:
+            if not self.is_playing or self.data is None:
+                return np.zeros((blocksize, 2), dtype='float32')
+
+            start = self.current_frame
+            end = start + blocksize
+
+            if start >= len(self.data):
+                self.is_playing = False
+                return np.zeros((blocksize, 2), dtype='float32')
+
+            if end > len(self.data):
+                chunk = self.data[start:]
+                if self.channels == 1:
+                    chunk = np.column_stack((chunk, chunk))
+                out = np.zeros((blocksize, 2), dtype='float32')
+                out[:len(chunk)] = chunk * self.volume
+                self.current_frame = len(self.data)
+                self.is_playing = False
+                return out
+            else:
+                chunk = self.data[start:end]
+                if self.channels == 1:
+                    chunk = np.column_stack((chunk, chunk))
+                self.current_frame = end
+                return chunk * self.volume
 
 
 # Instâncias globais do Player
@@ -375,6 +416,10 @@ def downloader_worker():
                     'preferredcodec': 'wav',
                     'preferredquality': '192',
                 }],
+                'postprocessor_args': [
+                    '-ar', '44100',
+                    '-ac', '2'
+                ],
                 'quiet': True,
             }
             try:
@@ -426,10 +471,47 @@ def player_supervisor():
                 else:
                     audio_player.stop()
 
+def master_audio_loop():
+    """Clock central de áudio que lê frames e distribui para alto-falantes locais e streaming HTTP."""
+    blocksize = 2048
+    block_duration = blocksize / 44100.0
+    
+    # Inicializa saída local do Termux
+    audio_player.start_stream()
+    
+    while True:
+        start_time = time.time()
+        
+        # Lê o próximo bloco de áudio do player
+        chunk = audio_player.get_next_chunk(blocksize)
+        
+        # Converte para PCM 16-bit estéreo com clipping de proteção para streaming de rede
+        clipped_chunk = np.clip(chunk, -1.0, 1.0)
+        pcm_bytes = (clipped_chunk * 32767.0).astype(np.int16).tobytes()
+        
+        # Distribui para todos os clientes conectados na rede local
+        audio_player.stream_manager.broadcast(pcm_bytes)
+        
+        # Toca localmente no Termux se não estiver mutado
+        if not audio_player.server_mute and audio_player.stream:
+            try:
+                audio_player.stream.write(chunk.astype('float32'))
+            except Exception as e:
+                # Se falhar, faz o throttling por sleep
+                elapsed = time.time() - start_time
+                sleep_time = max(0, block_duration - elapsed)
+                time.sleep(sleep_time)
+        else:
+            # Throttling por sleep (servidor mutado)
+            elapsed = time.time() - start_time
+            sleep_time = max(0, block_duration - elapsed)
+            time.sleep(sleep_time)
+
 
 # Inicializa as threads
 threading.Thread(target=downloader_worker, daemon=True).start()
 threading.Thread(target=player_supervisor, daemon=True).start()
+threading.Thread(target=master_audio_loop, daemon=True).start()
 
 
 # =================================================================
@@ -466,6 +548,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.handle_player_queue()
         elif parsed_path.path == '/api/player/status':
             self.handle_player_status()
+        elif parsed_path.path == '/api/player/stream':
+            self.handle_player_stream()
         elif parsed_path.path.startswith('/api/'):
             self.send_error_response("Rota da API não encontrada", 404)
         else:
@@ -563,6 +647,41 @@ class BulbHandler(SimpleHTTPRequestHandler):
             "volume": int(audio_player.volume * 100),
             "server_mute": audio_player.server_mute
         })
+
+    def handle_player_stream(self):
+        """Mantém uma conexão HTTP persistente transmitindo o WAV contínuo em tempo real."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'audio/wav')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'keep-alive')
+        self.send_header('Pragma', 'no-cache')
+        self.end_headers()
+        
+        import queue
+        # Fila local para este cliente com limite de buffers acumulados
+        data_queue = queue.Queue(maxsize=40)
+        
+        def write_client(data_bytes):
+            try:
+                data_queue.put_nowait(data_bytes)
+            except queue.Full:
+                pass # Descarta frames se a rede estiver lenta para evitar engasgos
+                
+        audio_player.stream_manager.add_client(write_client)
+        
+        try:
+            while write_client in audio_player.stream_manager.clients:
+                try:
+                    # Aguarda dados e envia no chunk HTTP
+                    chunk = data_queue.get(timeout=2.0)
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                except queue.Empty:
+                    pass
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            pass
+        finally:
+            audio_player.stream_manager.remove_client(write_client)
 
     def handle_player_add(self):
         try:
