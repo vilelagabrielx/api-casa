@@ -15,12 +15,27 @@ PORT = 4000
 
 def get_lamp():
     """Retorna uma nova instância de BulbDevice configurada."""
-    return tinytuya.BulbDevice(
+    lamp = tinytuya.BulbDevice(
         dev_id=LAMP_ID,
         address=LAMP_IP,
         local_key=LAMP_KEY,
         version=LAMP_VERSION
     )
+    # Pré-configura as capacidades de Lâmpada Colorida Tipo B (EKAZA)
+    # para evitar RuntimeError ao chamar set_colour com nowait=True
+    lamp.detect_bulb(response={
+        'dps': {
+            '20': True,            # switch
+            '21': 'colour',        # mode
+            '22': 1000,            # brightness
+            '23': 1000,            # colourtemp
+            '24': '000003e801f4',  # colour
+            '25': 'scene',
+            '26': 0,
+            '28': 'music'
+        }
+    })
+    return lamp
 
 class BulbHandler(SimpleHTTPRequestHandler):
     def translate_path(self, path):
