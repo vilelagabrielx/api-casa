@@ -900,7 +900,7 @@ function playPCMChunk(arrayBuffer) {
     // Sob sob sob underflow de rede (nextPlayTime ficou atrás do tempo atual de reprodução),
     // reinicializamos o jitter buffer em 150ms para garantir fluxo contínuo.
     if (nextPlayTime < now) {
-        nextPlayTime = now + 0.15; // 150ms de jitter buffer
+        nextPlayTime = now + 0.05; // 50ms de jitter buffer para sincronia ideal sem eco
     }
     
     source.start(nextPlayTime);
