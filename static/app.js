@@ -945,6 +945,7 @@ let netflixState = {
     activeSearch: "",
     currentVideoInfo: null,
     hlsInstance: null,
+    mpegtsInstance: null,
     historySaveInterval: null
 };
 
@@ -1398,15 +1399,32 @@ function playVideo(channel, startPosition = 0) {
     netflixState.currentVideoInfo = channel;
     netflixPlayerModal.classList.remove('hidden');
     
+    // Limpa instancias anteriores
     if (netflixState.hlsInstance) {
         netflixState.hlsInstance.destroy();
         netflixState.hlsInstance = null;
     }
+    if (netflixState.mpegtsInstance) {
+        netflixState.mpegtsInstance.destroy();
+        netflixState.mpegtsInstance = null;
+    }
     
     netflixVideo.src = "";
-    const isM3U8 = channel.url.toLowerCase().includes('.m3u8');
     
-    if (isM3U8) {
+    const urlLower = channel.url.toLowerCase();
+    const isM3U8 = urlLower.includes('.m3u8');
+    const isTS = urlLower.includes('.ts') || urlLower.includes('output=ts') || urlLower.includes('output=mpegts');
+    
+    if (isTS && typeof mpegts !== 'undefined' && mpegts.getFeatureList().mseLivePlayback) {
+        const mpegtsPlayer = mpegts.createPlayer({
+            type: 'mse',
+            isLive: true,
+            url: channel.url
+        });
+        netflixState.mpegtsInstance = mpegtsPlayer;
+        mpegtsPlayer.attachMediaElement(netflixVideo);
+        mpegtsPlayer.load();
+    } else if (isM3U8) {
         if (netflixVideo.canPlayType('application/vnd.apple.mpegurl')) {
             netflixVideo.src = channel.url;
         } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
@@ -1463,6 +1481,10 @@ function closePlayer() {
     if (netflixState.hlsInstance) {
         netflixState.hlsInstance.destroy();
         netflixState.hlsInstance = null;
+    }
+    if (netflixState.mpegtsInstance) {
+        netflixState.mpegtsInstance.destroy();
+        netflixState.mpegtsInstance = null;
     }
     
     netflixVideo.src = "";
