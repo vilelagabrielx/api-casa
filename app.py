@@ -137,7 +137,7 @@ def fetch_tmdb_metadata(name, is_series=False):
 
 def init_db():
     os.makedirs(os.path.join(BASE_DIR, 'static', 'cache'), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     cursor = conn.cursor()
     
     # Migração automática do schema anterior do banco de dados
@@ -1133,7 +1133,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 ))
 
             # Insere no SQLite em lote de forma extremamente rápida
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             cursor.execute("DELETE FROM channels")
             cursor.executemany(
@@ -1150,7 +1150,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
 
     def handle_m3u_status(self):
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             
             cursor.execute("SELECT COUNT(*) FROM channels")
@@ -1179,7 +1179,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
 
     def handle_m3u_categories(self):
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT group_title, COUNT(*) FROM channels GROUP BY group_title ORDER BY group_title ASC"
@@ -1205,7 +1205,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
             limit = int(queries.get('limit', [40])[0])
             offset = (page - 1) * limit
             
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             
             # Filtros aplicados sobre a seleção combinada (não-séries + séries agrupadas)
@@ -1319,7 +1319,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
 
     def handle_m3u_history(self):
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT name, logo, group_title, url, position, duration FROM history ORDER BY last_watched DESC LIMIT 15"
@@ -1357,7 +1357,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
             if not url:
                 raise Exception("URL inválida para atualizar histórico.")
                 
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO history (name, logo, group_title, url, position, duration, last_watched)
@@ -1382,7 +1382,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
             if not url:
                 raise Exception("URL de stream inválida.")
                 
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             cursor.execute("SELECT position FROM history WHERE url = ?", (url,))
             row = cursor.fetchone()
@@ -1395,7 +1395,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
 
     def handle_m3u_clear_catalog(self):
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             cursor.execute("DELETE FROM channels")
             cursor.execute("DELETE FROM history")
@@ -1415,7 +1415,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
             if not series_name:
                 raise Exception("Parâmetro series_name é obrigatório.")
                 
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT id, name, url, logo, season, episode, episode_name 
