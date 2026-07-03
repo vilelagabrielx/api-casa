@@ -52,23 +52,67 @@ def parse_m3u_content(m3u_text):
             
     return channels
 
+import re
+
+series_patterns = [
+    # Ex: Gangues da Galícia S01E02 ou Gangues da Galícia T01E02
+    re.compile(r'^(.*?)\s+([sStT])(\d+)\s*[eEpP](\d+)(.*)$', re.IGNORECASE),
+    # Ex: Gangues da Galícia 1x02
+    re.compile(r'^(.*?)\s+(\d+)x(\d+)(.*)$', re.IGNORECASE),
+    # Ex: Gangues da Galícia Temporada 1 Episodio 2
+    re.compile(r'^(.*?)\s+(?:season|temporada)\s*(\d+)\s+(?:episode|episodio|ep)\s*(\d+)(.*)$', re.IGNORECASE),
+]
+
+def parse_series_info(name):
+    name_clean = " ".join(name.split())
+    for pat in series_patterns:
+        m = pat.match(name_clean)
+        if m:
+            series_name = m.group(1).strip()
+            if len(m.groups()) == 5:
+                season = int(m.group(3))
+                episode = int(m.group(4))
+                extra = m.group(5).strip()
+            else:
+                season = int(m.group(2))
+                episode = int(m.group(3))
+                extra = m.group(4).strip()
+                
+            episode_name = extra.lstrip(' -').strip() if extra else f"Episódio {episode}"
+            return True, series_name, season, episode, episode_name
+    return False, name_clean, None, None, ""
+
 def init_db():
     os.makedirs('static/cache', exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Canais de IPTV analisados
+    # Migração automática do schema anterior do banco de dados
+    try:
+        cursor.execute("SELECT is_series FROM channels LIMIT 1")
+    except sqlite3.OperationalError:
+        # Coluna is_series não encontrada, reconstrói a tabela para aplicar o novo schema
+        cursor.execute("DROP TABLE IF EXISTS channels")
+        print("[Banco de Dados] Tabela channels antiga removida para migração de séries.")
+        
+    # Canais de IPTV analisados (com suporte a séries)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS channels (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
             logo TEXT,
             group_title TEXT,
-            url TEXT
+            url TEXT,
+            is_series INTEGER DEFAULT 0,
+            series_name TEXT,
+            season INTEGER,
+            episode INTEGER,
+            episode_name TEXT
         )
     ''')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_group ON channels(group_title)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_name ON channels(name)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_series ON channels(is_series, series_name)')
     
     # Histórico de reprodução (Continuar Assistindo)
     cursor.execute('''
@@ -710,6 +754,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.handle_m3u_category()
         elif parsed_path.path == '/api/m3u/history':
             self.handle_m3u_history()
+        elif parsed_path.path == '/api/m3u/series/episodes':
+            self.handle_m3u_series_episodes()
         elif parsed_path.path.startswith('/api/'):
             self.send_error_response("Rota da API não encontrada", 404)
         else:
@@ -1010,17 +1056,29 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 m3u_text = post_data.decode('utf-8', errors='replace')
 
             # Faz o parsing da lista
-            channels = parse_m3u_content(m3u_text)
-            if not channels:
+            parsed_channels = parse_m3u_content(m3u_text)
+            if not parsed_channels:
                 raise Exception("Nenhum canal válido encontrado na lista M3U. Verifique a sintaxe.")
+
+            # Analisa e mapeia os canais identificando quais são episódios de séries
+            channels_to_insert = []
+            for name, logo, group, url in parsed_channels:
+                is_series, series_name, season, episode, ep_name = parse_series_info(name)
+                channels_to_insert.append((
+                    name, logo, group, url,
+                    1 if is_series else 0,
+                    series_name if is_series else None,
+                    season, episode,
+                    ep_name if is_series else None
+                ))
 
             # Insere no SQLite em lote de forma extremamente rápida
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("DELETE FROM channels")
             cursor.executemany(
-                "INSERT INTO channels (name, logo, group_title, url) VALUES (?, ?, ?, ?)",
-                channels
+                "INSERT INTO channels (name, logo, group_title, url, is_series, series_name, season, episode, episode_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                channels_to_insert
             )
             conn.commit()
             conn.close()
@@ -1090,6 +1148,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             
+            # Filtros aplicados sobre a seleção combinada (não-séries + séries agrupadas)
             where_clauses = []
             params = []
             
@@ -1097,17 +1156,33 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 where_clauses.append("group_title = ?")
                 params.append(category)
             if search:
-                where_clauses.append("name LIKE ?")
+                # Busca pelo nome do canal original ou pelo nome limpo da série
+                where_clauses.append("(name LIKE ? OR series_name LIKE ?)")
+                params.append(f"%{search}%")
                 params.append(f"%{search}%")
                 
             where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
             
-            # Conta o total correspondente aos filtros
-            cursor.execute(f"SELECT COUNT(*) FROM channels{where_sql}", params)
+            # Consulta combinada
+            subquery = '''
+                SELECT id, name, logo, group_title, url, 0 AS is_series, NULL AS series_name 
+                FROM channels 
+                WHERE is_series = 0
+                
+                UNION ALL
+                
+                SELECT MIN(id) as id, series_name as name, logo, group_title, '' as url, 1 as is_series, series_name
+                FROM channels 
+                WHERE is_series = 1 
+                GROUP BY series_name
+            '''
+            
+            # Conta o total correspondente
+            cursor.execute(f"SELECT COUNT(*) FROM ({subquery}){where_sql}", params)
             total = cursor.fetchone()[0]
             
             # Busca canais paginados
-            query_sql = f"SELECT id, name, logo, group_title, url FROM channels{where_sql} LIMIT ? OFFSET ?"
+            query_sql = f"SELECT id, name, logo, group_title, url, is_series, series_name FROM ({subquery}){where_sql} ORDER BY name ASC LIMIT ? OFFSET ?"
             cursor.execute(query_sql, params + [limit, offset])
             rows = cursor.fetchall()
             conn.close()
@@ -1119,7 +1194,9 @@ class BulbHandler(SimpleHTTPRequestHandler):
                     "name": r[1],
                     "logo": r[2],
                     "group": r[3],
-                    "url": r[4]
+                    "url": r[4],
+                    "is_series": r[5],
+                    "series_name": r[6]
                 })
                 
             self.send_json_response({
@@ -1197,6 +1274,43 @@ class BulbHandler(SimpleHTTPRequestHandler):
             conn.commit()
             conn.close()
             self.send_json_response({"success": True})
+        except Exception as e:
+            self.send_error_response(str(e))
+
+    def handle_m3u_series_episodes(self):
+        try:
+            parsed = urlparse(self.path)
+            from urllib.parse import parse_qs
+            queries = parse_qs(parsed.query)
+            
+            series_name = queries.get('series_name', [''])[0].strip()
+            if not series_name:
+                raise Exception("Parâmetro series_name é obrigatório.")
+                
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, name, url, logo, season, episode, episode_name 
+                FROM channels 
+                WHERE is_series = 1 AND series_name = ?
+                ORDER BY season ASC, episode ASC
+            ''', (series_name,))
+            rows = cursor.fetchall()
+            conn.close()
+            
+            episodes = []
+            for r in rows:
+                episodes.append({
+                    "id": r[0],
+                    "name": r[1],
+                    "url": r[2],
+                    "logo": r[3],
+                    "season": r[4],
+                    "episode": r[5],
+                    "episode_name": r[6]
+                })
+                
+            self.send_json_response({"success": True, "episodes": episodes})
         except Exception as e:
             self.send_error_response(str(e))
 

@@ -315,6 +315,43 @@
                     <video id="netflix-video" controls autoplay playsinline></video>
                 </div>
             </div>
+
+            <!-- Series Details Modal -->
+            <div id="netflix-series-modal" class="series-modal hidden">
+                <div class="series-modal-content">
+                    <button class="series-close-btn" id="btn-close-series" aria-label="Fechar Detalhes">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                    
+                    <div class="series-header-banner">
+                        <div class="series-banner-bg" id="series-banner-bg"></div>
+                        <div class="series-banner-overlay"></div>
+                        <div class="series-banner-info">
+                            <span class="series-badge">Série</span>
+                            <h2 id="series-modal-title">Nome da Série</h2>
+                            <p id="series-modal-group">Categoria</p>
+                        </div>
+                    </div>
+                    
+                    <div class="series-body">
+                        <div class="series-controls">
+                            <label for="series-season-select">Temporada:</label>
+                            <select id="series-season-select" class="custom-select">
+                                <!-- Populado dinamicamente -->
+                            </select>
+                        </div>
+                        
+                        <div class="series-episodes-container">
+                            <div class="series-episodes-grid" id="series-episodes-grid">
+                                <!-- Populado dinamicamente -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </main>
         
         <!-- Footer -->

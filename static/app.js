@@ -964,6 +964,17 @@ const netflixPlayerModal = document.getElementById('netflix-player-modal');
 const btnClosePlayer = document.getElementById('btn-close-player');
 const netflixVideo = document.getElementById('netflix-video');
 
+// Elementos do Modal de Séries
+const netflixSeriesModal = document.getElementById('netflix-series-modal');
+const btnCloseSeries = document.getElementById('btn-close-series');
+const seriesModalTitle = document.getElementById('series-modal-title');
+const seriesModalGroup = document.getElementById('series-modal-group');
+const seriesBannerBg = document.getElementById('series-banner-bg');
+const seriesSeasonSelect = document.getElementById('series-season-select');
+const seriesEpisodesGrid = document.getElementById('series-episodes-grid');
+
+let seriesEpisodesData = []; // Armazena episódios carregados da série ativa
+
 // Configura eventos da aba Netflix
 function setupNetflixEvents() {
     // Importação por URL
@@ -1061,10 +1072,26 @@ function setupNetflixEvents() {
         btnClosePlayer.addEventListener('click', closePlayer);
     }
     
-    // Fechar player apertando ESC
+    // Fechar Modal de Séries
+    if (btnCloseSeries) {
+        btnCloseSeries.addEventListener('click', closeSeriesDetails);
+    }
+
+    // Seletor de Temporadas
+    if (seriesSeasonSelect) {
+        seriesSeasonSelect.addEventListener('change', (e) => {
+            renderActiveSeasonEpisodes(parseInt(e.target.value));
+        });
+    }
+
+    // Fechar player ou modal de séries apertando ESC
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && netflixPlayerModal && !netflixPlayerModal.classList.contains('hidden')) {
-            closePlayer();
+        if (e.key === 'Escape') {
+            if (netflixPlayerModal && !netflixPlayerModal.classList.contains('hidden')) {
+                closePlayer();
+            } else if (netflixSeriesModal && !netflixSeriesModal.classList.contains('hidden')) {
+                closeSeriesDetails();
+            }
         }
     });
 
@@ -1246,7 +1273,11 @@ function createVideoCard(channel, progress = null) {
     }
     
     card.addEventListener('click', () => {
-        playVideo(channel, progress ? progress.position : 0);
+        if (channel.is_series === 1) {
+            openSeriesDetails(channel.series_name || channel.name, channel.logo, channel.group);
+        } else {
+            playVideo(channel, progress ? progress.position : 0);
+        }
     });
     
     return card;
@@ -1435,6 +1466,102 @@ function closePlayer() {
     netflixState.currentVideoInfo = null;
     
     renderShelves();
+}
+
+function openSeriesDetails(seriesName, logo, group) {
+    if (!netflixSeriesModal) return;
+    
+    seriesModalTitle.textContent = seriesName;
+    seriesModalGroup.textContent = group;
+    
+    if (logo && logo.startsWith('http')) {
+        seriesBannerBg.style.backgroundImage = `url('${logo}')`;
+    } else {
+        seriesBannerBg.style.backgroundImage = `linear-gradient(135deg, #1e1b4b 0%, #020617 100%)`;
+    }
+    
+    seriesEpisodesGrid.innerHTML = "<p style='padding:20px; color:var(--text-secondary);'>Carregando episódios...</p>";
+    seriesSeasonSelect.innerHTML = "";
+    netflixSeriesModal.classList.remove('hidden');
+    
+    fetch(`/api/m3u/series/episodes?series_name=${encodeURIComponent(seriesName)}`)
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            seriesEpisodesData = data.episodes;
+            
+            // Extrai as temporadas únicas
+            const seasons = [...new Set(data.episodes.map(ep => ep.season))].sort((a, b) => a - b);
+            
+            if (seasons.length === 0) {
+                seriesEpisodesGrid.innerHTML = "<p style='padding:20px; color:var(--text-secondary);'>Nenhum episódio encontrado.</p>";
+                return;
+            }
+            
+            // Popula o dropdown de temporadas
+            seasons.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s;
+                opt.textContent = `Temporada ${s}`;
+                seriesSeasonSelect.appendChild(opt);
+            });
+            
+            // Exibe a primeira temporada por padrão
+            renderActiveSeasonEpisodes(seasons[0]);
+        } else {
+            seriesEpisodesGrid.innerHTML = `<p style='padding:20px; color:#ef4444;'>Erro: ${data.error}</p>`;
+        }
+    })
+    .catch(() => {
+        seriesEpisodesGrid.innerHTML = "<p style='padding:20px; color:#ef4444;'>Erro ao conectar com o servidor.</p>";
+    });
+}
+
+function renderActiveSeasonEpisodes(seasonNum) {
+    if (!seriesEpisodesGrid) return;
+    seriesEpisodesGrid.innerHTML = "";
+    
+    const seasonEps = seriesEpisodesData
+        .filter(ep => ep.season === seasonNum)
+        .sort((a, b) => a.episode - b.episode);
+        
+    seasonEps.forEach(ep => {
+        const row = document.createElement('div');
+        row.className = "episode-row";
+        
+        row.innerHTML = `
+            <div class="episode-info">
+                <div class="episode-number">${String(ep.episode).padStart(2, '0')}</div>
+                <div class="episode-details">
+                    <div class="episode-title">${ep.episode_name || `Episódio ${ep.episode}`}</div>
+                    <div class="episode-meta">Temporada ${ep.season} &bull; S0${ep.season}E${String(ep.episode).padStart(2, '0')}</div>
+                </div>
+            </div>
+            <div class="episode-play-icon">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+            </div>
+        `;
+        
+        const channelMock = {
+            name: `${seriesModalTitle.textContent} S0${ep.season}E${String(ep.episode).padStart(2, '0')}`,
+            logo: ep.logo,
+            group: seriesModalGroup.textContent,
+            url: ep.url
+        };
+        
+        row.addEventListener('click', () => {
+            playVideo(channelMock);
+        });
+        
+        seriesEpisodesGrid.appendChild(row);
+    });
+}
+
+function closeSeriesDetails() {
+    if (netflixSeriesModal) netflixSeriesModal.classList.add('hidden');
+    seriesEpisodesData = [];
 }
 
 // Inicializa a escuta dos eventos do Cine Casa
