@@ -1083,8 +1083,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
             conn.commit()
             conn.close()
 
-            print(f"[Cine Casa] Importação concluída. Total de canais: {len(channels)}")
-            self.send_json_response({"success": True, "count": len(channels)})
+            print(f"[Cine Casa] Importação concluída. Total de canais: {len(parsed_channels)}")
+            self.send_json_response({"success": True, "count": len(parsed_channels)})
         except Exception as e:
             self.send_error_response(str(e))
 
