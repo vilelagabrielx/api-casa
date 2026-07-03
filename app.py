@@ -8,8 +8,85 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 import yt_dlp
+import sqlite3
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
+
+DB_PATH = 'static/cache/iptv_catalog.db'
+
+def parse_m3u_content(m3u_text):
+    import re
+    logo_regex = re.compile(r'tvg-logo=["\'](.*?)["\']', re.IGNORECASE)
+    group_regex = re.compile(r'group-title=["\'](.*?)["\']', re.IGNORECASE)
+    
+    channels = []
+    current_name = None
+    current_logo = ""
+    current_group = "Geral"
+    
+    for line in m3u_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#EXTINF:"):
+            # Extrai o nome (tudo após a última vírgula)
+            comma_idx = line.rfind(',')
+            current_name = line[comma_idx+1:].strip() if comma_idx != -1 else "Canal Sem Nome"
+            
+            # Extrai logo e group-title
+            logo_match = logo_regex.search(line)
+            current_logo = logo_match.group(1) if logo_match else ""
+            
+            group_match = group_regex.search(line)
+            current_group = group_match.group(1) if group_match else "Geral"
+            
+        elif not line.startswith("#"):
+            # Linha de URL
+            if current_name is None:
+                current_name = line.split('/')[-1] or "Canal Sem Nome"
+            channels.append((current_name, current_logo, current_group, line))
+            # Reseta estado temporário
+            current_name = None
+            current_logo = ""
+            current_group = "Geral"
+            
+    return channels
+
+def init_db():
+    os.makedirs('static/cache', exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Canais de IPTV analisados
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            logo TEXT,
+            group_title TEXT,
+            url TEXT
+        )
+    ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_group ON channels(group_title)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_name ON channels(name)')
+    
+    # Histórico de reprodução (Continuar Assistindo)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            logo TEXT,
+            group_title TEXT,
+            url TEXT UNIQUE,
+            position REAL,
+            duration REAL,
+            last_watched TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    print("[Banco de Dados] SQLite de IPTV e histórico inicializado com sucesso.")
 
 # Configurações da lâmpada (definidas pelo usuário)
 LAMP_ID = 'eb49c1e95cce655e6ac6mk'
@@ -624,6 +701,15 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 self.send_error_response("Upgrade para WebSocket necessário", 400)
         elif parsed_path.path == '/api/player/devices':
             self.handle_player_devices()
+        # Rotas do Cine Casa (IPTV)
+        elif parsed_path.path == '/api/m3u/status':
+            self.handle_m3u_status()
+        elif parsed_path.path == '/api/m3u/categories':
+            self.handle_m3u_categories()
+        elif parsed_path.path == '/api/m3u/category':
+            self.handle_m3u_category()
+        elif parsed_path.path == '/api/m3u/history':
+            self.handle_m3u_history()
         elif parsed_path.path.startswith('/api/'):
             self.send_error_response("Rota da API não encontrada", 404)
         else:
@@ -643,6 +729,13 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.handle_player_add()
         elif parsed_path.path == '/api/player/control':
             self.handle_player_control()
+        # Rotas do Cine Casa (IPTV)
+        elif parsed_path.path == '/api/m3u/import':
+            self.handle_m3u_import()
+        elif parsed_path.path == '/api/m3u/history/update':
+            self.handle_m3u_history_update()
+        elif parsed_path.path == '/api/m3u/clear':
+            self.handle_m3u_clear_catalog()
         else:
             self.send_error_response("Rota da API não encontrada", 404)
 
@@ -889,6 +982,224 @@ class BulbHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error_response(str(e))
 
+    # Endpoints do Cine Casa (Netflix Local IPTV)
+    def handle_m3u_import(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            
+            # Tenta decodificar como JSON para ver se é uma importação por URL
+            is_url = False
+            m3u_url = ""
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                if isinstance(data, dict) and 'url' in data:
+                    m3u_url = data['url'].strip()
+                    is_url = True
+            except Exception:
+                pass
+
+            m3u_text = ""
+            if is_url:
+                print(f"[Cine Casa] Baixando lista M3U da URL: {m3u_url}")
+                import urllib.request
+                req = urllib.request.Request(m3u_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    m3u_text = response.read().decode('utf-8', errors='replace')
+            else:
+                m3u_text = post_data.decode('utf-8', errors='replace')
+
+            # Faz o parsing da lista
+            channels = parse_m3u_content(m3u_text)
+            if not channels:
+                raise Exception("Nenhum canal válido encontrado na lista M3U. Verifique a sintaxe.")
+
+            # Insere no SQLite em lote de forma extremamente rápida
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM channels")
+            cursor.executemany(
+                "INSERT INTO channels (name, logo, group_title, url) VALUES (?, ?, ?, ?)",
+                channels
+            )
+            conn.commit()
+            conn.close()
+
+            print(f"[Cine Casa] Importação concluída. Total de canais: {len(channels)}")
+            self.send_json_response({"success": True, "count": len(channels)})
+        except Exception as e:
+            self.send_error_response(str(e))
+
+    def handle_m3u_status(self):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM channels")
+            total = cursor.fetchone()[0]
+            
+            loaded = total > 0
+            categories = []
+            
+            if loaded:
+                # Retorna as 8 principais categorias (com mais canais)
+                cursor.execute(
+                    "SELECT group_title, COUNT(*) FROM channels GROUP BY group_title ORDER BY COUNT(*) DESC LIMIT 8"
+                )
+                rows = cursor.fetchall()
+                categories = [{"name": r[0], "count": r[1]} for r in rows]
+                
+            conn.close()
+            self.send_json_response({
+                "success": True,
+                "loaded": loaded,
+                "channel_count": total,
+                "top_categories": categories
+            })
+        except Exception as e:
+            self.send_error_response(str(e))
+
+    def handle_m3u_categories(self):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT group_title, COUNT(*) FROM channels GROUP BY group_title ORDER BY group_title ASC"
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            
+            categories = [{"name": r[0], "count": r[1]} for r in rows]
+            self.send_json_response({"success": True, "categories": categories})
+        except Exception as e:
+            self.send_error_response(str(e))
+
+    def handle_m3u_category(self):
+        try:
+            # Parse query parameters from path
+            parsed = urlparse(self.path)
+            from urllib.parse import parse_qs
+            queries = parse_qs(parsed.query)
+            
+            category = queries.get('category', [''])[0].strip()
+            search = queries.get('search', [''])[0].strip()
+            page = int(queries.get('page', [1])[0])
+            limit = int(queries.get('limit', [40])[0])
+            offset = (page - 1) * limit
+            
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            where_clauses = []
+            params = []
+            
+            if category:
+                where_clauses.append("group_title = ?")
+                params.append(category)
+            if search:
+                where_clauses.append("name LIKE ?")
+                params.append(f"%{search}%")
+                
+            where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+            
+            # Conta o total correspondente aos filtros
+            cursor.execute(f"SELECT COUNT(*) FROM channels{where_sql}", params)
+            total = cursor.fetchone()[0]
+            
+            # Busca canais paginados
+            query_sql = f"SELECT id, name, logo, group_title, url FROM channels{where_sql} LIMIT ? OFFSET ?"
+            cursor.execute(query_sql, params + [limit, offset])
+            rows = cursor.fetchall()
+            conn.close()
+            
+            channels = []
+            for r in rows:
+                channels.append({
+                    "id": r[0],
+                    "name": r[1],
+                    "logo": r[2],
+                    "group": r[3],
+                    "url": r[4]
+                })
+                
+            self.send_json_response({
+                "success": True,
+                "channels": channels,
+                "total": total,
+                "page": page,
+                "limit": limit
+            })
+        except Exception as e:
+            self.send_error_response(str(e))
+
+    def handle_m3u_history(self):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, logo, group_title, url, position, duration FROM history ORDER BY last_watched DESC LIMIT 15"
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            
+            history = []
+            for r in rows:
+                history.append({
+                    "name": r[0],
+                    "logo": r[1],
+                    "group": r[2],
+                    "url": r[3],
+                    "position": r[4],
+                    "duration": r[5]
+                })
+            self.send_json_response({"success": True, "history": history})
+        except Exception as e:
+            self.send_error_response(str(e))
+
+    def handle_m3u_history_update(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            data = json.loads(post_data.decode('utf-8'))
+            
+            name = data.get('name', '').strip()
+            logo = data.get('logo', '').strip()
+            group = data.get('group', '').strip()
+            url = data.get('url', '').strip()
+            position = float(data.get('position', 0.0))
+            duration = float(data.get('duration', 0.0))
+            
+            if not url:
+                raise Exception("URL inválida para atualizar histórico.")
+                
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO history (name, logo, group_title, url, position, duration, last_watched)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(url) DO UPDATE SET
+                    position = excluded.position,
+                    duration = excluded.duration,
+                    last_watched = excluded.last_watched
+            ''')
+            conn.commit()
+            conn.close()
+            self.send_json_response({"success": True})
+        except Exception as e:
+            self.send_error_response(str(e))
+
+    def handle_m3u_clear_catalog(self):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM channels")
+            cursor.execute("DELETE FROM history")
+            conn.commit()
+            conn.close()
+            self.send_json_response({"success": True})
+        except Exception as e:
+            self.send_error_response(str(e))
+
     # Utilitários de Resposta
     def send_json_response(self, data, code=200):
         self.send_response(code)
@@ -900,15 +1211,21 @@ class BulbHandler(SimpleHTTPRequestHandler):
         self.send_json_response({"success": False, "error": message}, code)
 
 if __name__ == "__main__":
-    # Limpa cache antigo ao iniciar para evitar resíduos de execuções anteriores
-    import shutil
+    # Inicializa o banco de dados SQLite para IPTV e histórico
+    init_db()
+
+    # Limpa apenas os arquivos .wav temporários na inicialização para poupar espaço,
+    # preservando o arquivo .db de catálogo e histórico.
     if os.path.exists('static/cache'):
         try:
-            shutil.rmtree('static/cache')
-            print("[Limpeza] Pasta static/cache limpa na inicialização.")
+            for item in os.listdir('static/cache'):
+                if item.endswith('.wav'):
+                    os.remove(os.path.join('static/cache', item))
+            print("[Limpeza] Arquivos .wav de cache temporário limpos na inicialização.")
         except Exception as e:
-            print("Erro ao limpar static/cache inicial:", e)
-    os.makedirs('static/cache', exist_ok=True)
+            print("Erro ao limpar cache inicial de áudio:", e)
+    else:
+        os.makedirs('static/cache', exist_ok=True)
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), BulbHandler)
     print(f"API e Website rodando em http://localhost:{PORT}")

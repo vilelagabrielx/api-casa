@@ -428,6 +428,7 @@ setupEventListeners = function() {
     
     // Configura navegação por abas
     const navTabs = document.querySelectorAll('.nav-tab');
+    const sectionNetflix = document.getElementById('section-netflix');
     navTabs.forEach(tab => {
         tab.addEventListener('click', (e) => {
             navTabs.forEach(t => t.classList.remove('active'));
@@ -437,12 +438,19 @@ setupEventListeners = function() {
             if (targetNav === 'lights') {
                 sectionLights.style.display = 'block';
                 sectionMusic.style.display = 'none';
-            } else {
+                sectionNetflix.style.display = 'none';
+            } else if (targetNav === 'music') {
                 sectionLights.style.display = 'none';
                 sectionMusic.style.display = 'block';
+                sectionNetflix.style.display = 'none';
                 // Atualiza dados de áudio instantaneamente
                 fetchMusicStatus();
                 fetchMusicQueue();
+            } else if (targetNav === 'netflix') {
+                sectionLights.style.display = 'none';
+                sectionMusic.style.display = 'none';
+                sectionNetflix.style.display = 'block';
+                checkM3UStatus();
             }
         });
     });
@@ -921,3 +929,513 @@ function playPCMChunk(arrayBuffer) {
     source.start(nextPlayTime);
     nextPlayTime += audioBuffer.duration;
 }
+
+// =================================================================
+// LOGICA DO CINE CASA (NETFLIX LOCAL IPTV)
+// =================================================================
+
+let netflixState = {
+    loaded: false,
+    topCategories: [],
+    activeCategory: null,
+    activeSearch: "",
+    currentVideoInfo: null,
+    hlsInstance: null,
+    historySaveInterval: null
+};
+
+// Bind de Elementos
+const netflixSetup = document.getElementById('netflix-setup');
+const netflixCatalog = document.getElementById('netflix-catalog');
+const m3uUrlInput = document.getElementById('m3u-url-input');
+const btnImportM3uUrl = document.getElementById('btn-import-m3u-url');
+const m3uFileDrop = document.getElementById('m3u-file-drop');
+const m3uFileInput = document.getElementById('m3u-file-input');
+const netflixSearch = document.getElementById('netflix-search');
+const btnChangePlaylist = document.getElementById('btn-change-playlist');
+const netflixCategoryTags = document.getElementById('netflix-category-tags');
+const netflixShelves = document.getElementById('netflix-shelves');
+const btnHeroPlay = document.getElementById('btn-hero-play');
+const netflixHero = document.getElementById('netflix-hero');
+const netflixHeroTitle = document.getElementById('netflix-hero-title');
+const netflixHeroCategory = document.getElementById('netflix-hero-category');
+const netflixHeroBg = document.getElementById('netflix-hero-bg');
+const netflixPlayerModal = document.getElementById('netflix-player-modal');
+const btnClosePlayer = document.getElementById('btn-close-player');
+const netflixVideo = document.getElementById('netflix-video');
+
+// Configura eventos da aba Netflix
+function setupNetflixEvents() {
+    // Importação por URL
+    if (btnImportM3uUrl) {
+        btnImportM3uUrl.addEventListener('click', () => {
+            const url = m3uUrlInput.value.trim();
+            if (!url) return alert("Por favor, cole um link válido.");
+            btnImportM3uUrl.disabled = true;
+            btnImportM3uUrl.textContent = "Baixando...";
+            
+            fetch('/api/m3u/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url })
+            })
+            .then(r => r.json())
+            .then(data => {
+                btnImportM3uUrl.disabled = false;
+                btnImportM3uUrl.textContent = "Importar Link";
+                if (data.success) {
+                    m3uUrlInput.value = "";
+                    alert(`Lista importada com sucesso! ${data.count} canais catalogados.`);
+                    checkM3UStatus();
+                } else {
+                    alert(`Erro: ${data.error}`);
+                }
+            })
+            .catch(err => {
+                btnImportM3uUrl.disabled = false;
+                btnImportM3uUrl.textContent = "Importar Link";
+                alert("Erro de conexão ao importar lista.");
+            });
+        });
+    }
+
+    // Upload por File Drop
+    if (m3uFileDrop) {
+        m3uFileDrop.addEventListener('click', () => m3uFileInput.click());
+        
+        m3uFileDrop.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            m3uFileDrop.style.borderColor = 'var(--primary-color)';
+        });
+        
+        m3uFileDrop.addEventListener('dragleave', () => {
+            m3uFileDrop.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+        });
+        
+        m3uFileDrop.addEventListener('drop', (e) => {
+            e.preventDefault();
+            m3uFileDrop.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+            if (e.dataTransfer.files.length > 0) {
+                uploadM3UFile(e.dataTransfer.files[0]);
+            }
+        });
+    }
+
+    if (m3uFileInput) {
+        m3uFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                uploadM3UFile(e.target.files[0]);
+            }
+        });
+    }
+
+    // Botão Trocar Lista
+    if (btnChangePlaylist) {
+        btnChangePlaylist.addEventListener('click', () => {
+            if (confirm("Tem certeza que deseja apagar o catálogo e enviar outra lista M3U?")) {
+                fetch('/api/m3u/clear', { method: 'POST' })
+                .then(() => checkM3UStatus());
+            }
+        });
+    }
+
+    // Barra de Busca com Debounce
+    if (netflixSearch) {
+        let searchDebounce;
+        netflixSearch.addEventListener('input', (e) => {
+            clearTimeout(searchDebounce);
+            const query = e.target.value.trim();
+            searchDebounce = setTimeout(() => {
+                netflixState.activeSearch = query;
+                if (query.length > 0) {
+                    renderSearchResults(query);
+                } else {
+                    renderShelves();
+                }
+            }, 300);
+        });
+    }
+
+    // Fechar Player Modal
+    if (btnClosePlayer) {
+        btnClosePlayer.addEventListener('click', closePlayer);
+    }
+    
+    // Fechar player apertando ESC
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && netflixPlayerModal && !netflixPlayerModal.classList.contains('hidden')) {
+            closePlayer();
+        }
+    });
+
+    // Se já estiver na aba netflix ao carregar, verifica status
+    checkM3UStatus();
+}
+
+function uploadM3UFile(file) {
+    const reader = new FileReader();
+    const dropText = m3uFileDrop.querySelector('span');
+    const originalText = dropText.textContent;
+    
+    dropText.textContent = "Processando arquivo...";
+    m3uFileDrop.style.pointerEvents = 'none';
+    
+    reader.onload = function(e) {
+        const text = e.target.result;
+        fetch('/api/m3u/import', {
+            method: 'POST',
+            body: text
+        })
+        .then(r => r.json())
+        .then(data => {
+            dropText.textContent = originalText;
+            m3uFileDrop.style.pointerEvents = 'auto';
+            if (data.success) {
+                alert(`Arquivo importado! ${data.count} canais analisados com sucesso.`);
+                checkM3UStatus();
+            } else {
+                alert(`Erro ao importar: ${data.error}`);
+            }
+        })
+        .catch(() => {
+            dropText.textContent = originalText;
+            m3uFileDrop.style.pointerEvents = 'auto';
+            alert("Erro de conexão ao enviar arquivo.");
+        });
+    };
+    reader.readAsText(file);
+}
+
+function checkM3UStatus() {
+    if (!netflixSetup || !netflixCatalog) return;
+    
+    fetch('/api/m3u/status')
+    .then(r => r.json())
+    .then(data => {
+        if (data.success && data.loaded) {
+            netflixSetup.classList.add('hidden');
+            netflixCatalog.classList.remove('hidden');
+            netflixState.loaded = true;
+            netflixState.topCategories = data.top_categories;
+            
+            renderCategoryTags();
+            renderShelves();
+            loadHeroBanner();
+        } else {
+            netflixSetup.classList.remove('hidden');
+            netflixCatalog.classList.add('hidden');
+            netflixState.loaded = false;
+        }
+    })
+    .catch(() => {
+        // Ignora falhas silenciosas de rede ao inicializar offline
+    });
+}
+
+function renderCategoryTags() {
+    if (!netflixCategoryTags) return;
+    netflixCategoryTags.innerHTML = "";
+    
+    // Tag "Tudo"
+    const tagAll = document.createElement('button');
+    tagAll.className = "category-tag active";
+    tagAll.textContent = "🎬 Início";
+    tagAll.addEventListener('click', () => {
+        document.querySelectorAll('.category-tag').forEach(t => t.classList.remove('active'));
+        tagAll.classList.add('active');
+        netflixSearch.value = "";
+        netflixState.activeSearch = "";
+        renderShelves();
+    });
+    netflixCategoryTags.appendChild(tagAll);
+    
+    // Tags dinâmicas com as maiores categorias
+    netflixState.topCategories.forEach(cat => {
+        const btn = document.createElement('button');
+        btn.className = "category-tag";
+        btn.textContent = `${cat.name} (${cat.count})`;
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.category-tag').forEach(t => t.classList.remove('active'));
+            btn.classList.add('active');
+            renderCategoryShelf(cat.name);
+        });
+        netflixCategoryTags.appendChild(btn);
+    });
+}
+
+function renderShelves() {
+    if (!netflixShelves) return;
+    netflixShelves.innerHTML = "";
+    
+    // 1. Renderiza a fileira "Continuar Assistindo" se tiver itens
+    fetch('/api/m3u/history')
+    .then(r => r.json())
+    .then(data => {
+        if (data.success && data.history.length > 0) {
+            const shelf = createShelfDOM("Continuar Assistindo");
+            const row = shelf.querySelector('.shelf-row');
+            
+            data.history.forEach(item => {
+                const card = createVideoCard(item, { position: item.position, duration: item.duration });
+                row.appendChild(card);
+            });
+            netflixShelves.prepend(shelf);
+        }
+    });
+
+    // 2. Renderiza as fileiras padrões das maiores categorias
+    netflixState.topCategories.slice(0, 5).forEach(cat => {
+        const shelf = createShelfDOM(cat.name);
+        netflixShelves.appendChild(shelf);
+        const row = shelf.querySelector('.shelf-row');
+        
+        fetch(`/api/m3u/category?category=${encodeURIComponent(cat.name)}&limit=25`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                data.channels.forEach(ch => {
+                    row.appendChild(createVideoCard(ch));
+                });
+            }
+        });
+    });
+}
+
+function createShelfDOM(title) {
+    const shelf = document.createElement('div');
+    shelf.className = "shelf-container";
+    shelf.innerHTML = `
+        <h3 class="shelf-title">${title}</h3>
+        <div class="shelf-row-wrapper">
+            <div class="shelf-row"></div>
+        </div>
+    `;
+    return shelf;
+}
+
+function createVideoCard(channel, progress = null) {
+    const card = document.createElement('div');
+    card.className = "video-card";
+    
+    if (channel.logo && channel.logo.startsWith('http')) {
+        const img = document.createElement('img');
+        img.className = "card-logo";
+        img.src = channel.logo;
+        img.alt = channel.name;
+        img.onerror = () => {
+            img.remove();
+            card.appendChild(createCardPlaceholderDOM(channel));
+        };
+        card.appendChild(img);
+        
+        const overlay = document.createElement('div');
+        overlay.className = "card-info-overlay";
+        overlay.innerHTML = `<span class="card-title">${channel.name}</span>`;
+        card.appendChild(overlay);
+    } else {
+        card.appendChild(createCardPlaceholderDOM(channel));
+    }
+    
+    // Adiciona barra de progresso do Continuar Assistindo se disponível
+    if (progress && progress.duration > 0) {
+        const pct = (progress.position / progress.duration) * 100;
+        const progressEl = document.createElement('div');
+        progressEl.className = "card-progress-bar";
+        progressEl.innerHTML = `<div class="card-progress-fill" style="width: ${pct}%"></div>`;
+        card.appendChild(progressEl);
+    }
+    
+    card.addEventListener('click', () => {
+        playVideo(channel, progress ? progress.position : 0);
+    });
+    
+    return card;
+}
+
+function createCardPlaceholderDOM(channel) {
+    const placeholder = document.createElement('div');
+    placeholder.className = "card-placeholder";
+    placeholder.innerHTML = `
+        <span class="card-placeholder-group">${channel.group || 'Cine'}</span>
+        <span class="card-placeholder-title">${channel.name}</span>
+    `;
+    return placeholder;
+}
+
+function renderCategoryShelf(categoryName) {
+    if (!netflixShelves) return;
+    netflixShelves.innerHTML = "";
+    const shelf = createShelfDOM(categoryName);
+    netflixShelves.appendChild(shelf);
+    const row = shelf.querySelector('.shelf-row');
+    row.style.flexWrap = "wrap";
+    row.style.overflowX = "visible";
+    
+    let currentPage = 1;
+    let isLoading = false;
+    let hasMore = true;
+    
+    function loadMore() {
+        if (isLoading || !hasMore) return;
+        isLoading = true;
+        
+        fetch(`/api/m3u/category?category=${encodeURIComponent(categoryName)}&page=${currentPage}&limit=40`)
+        .then(r => r.json())
+        .then(data => {
+            isLoading = false;
+            if (data.success) {
+                if (data.channels.length === 0) {
+                    hasMore = false;
+                    return;
+                }
+                data.channels.forEach(ch => {
+                    row.appendChild(createVideoCard(ch));
+                });
+                currentPage++;
+                if (data.channels.length < 40) {
+                    hasMore = false;
+                }
+            }
+        });
+    }
+    
+    loadMore();
+    
+    window.onscroll = () => {
+        if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 300) {
+            loadMore();
+        }
+    };
+}
+
+function renderSearchResults(query) {
+    if (!netflixShelves) return;
+    netflixShelves.innerHTML = "";
+    const shelf = createShelfDOM(`Resultados para "${query}"`);
+    netflixShelves.appendChild(shelf);
+    const row = shelf.querySelector('.shelf-row');
+    row.style.flexWrap = "wrap";
+    
+    fetch(`/api/m3u/category?search=${encodeURIComponent(query)}&limit=50`)
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            if (data.channels.length === 0) {
+                row.innerHTML = `<p style="padding: 20px; color: var(--text-secondary);">Nenhum canal ou filme encontrado.</p>`;
+                return;
+            }
+            data.channels.forEach(ch => {
+                row.appendChild(createVideoCard(ch));
+            });
+        }
+    });
+}
+
+function loadHeroBanner() {
+    if (netflixState.topCategories.length === 0 || !netflixHeroTitle) return;
+    const cat = netflixState.topCategories[0].name;
+    
+    fetch(`/api/m3u/category?category=${encodeURIComponent(cat)}&limit=10`)
+    .then(r => r.json())
+    .then(data => {
+        if (data.success && data.channels.length > 0) {
+            const idx = Math.floor(Math.random() * data.channels.length);
+            const ch = data.channels[idx];
+            
+            netflixHeroTitle.textContent = ch.name;
+            if (netflixHeroCategory) netflixHeroCategory.textContent = ch.group;
+            
+            if (ch.logo && netflixHeroBg) {
+                netflixHeroBg.style.backgroundImage = `url('${ch.logo}')`;
+            } else if (netflixHeroBg) {
+                netflixHeroBg.style.backgroundImage = `linear-gradient(135deg, #1e1b4b 0%, #020617 100%)`;
+            }
+            
+            if (btnHeroPlay) {
+                btnHeroPlay.onclick = () => playVideo(ch);
+            }
+        }
+    });
+}
+
+function playVideo(channel, startPosition = 0) {
+    if (!netflixPlayerModal || !netflixVideo) return;
+    netflixState.currentVideoInfo = channel;
+    netflixPlayerModal.classList.remove('hidden');
+    
+    if (netflixState.hlsInstance) {
+        netflixState.hlsInstance.destroy();
+        netflixState.hlsInstance = null;
+    }
+    
+    netflixVideo.src = "";
+    const isM3U8 = channel.url.toLowerCase().includes('.m3u8');
+    
+    if (isM3U8) {
+        if (netflixVideo.canPlayType('application/vnd.apple.mpegurl')) {
+            netflixVideo.src = channel.url;
+        } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+            const hls = new Hls({
+                maxMaxBufferLength: 10,
+                enableWorker: true
+            });
+            netflixState.hlsInstance = hls;
+            hls.loadSource(channel.url);
+            hls.attachMedia(netflixVideo);
+        } else {
+            netflixVideo.src = channel.url;
+        }
+    } else {
+        netflixVideo.src = channel.url;
+    }
+    
+    netflixVideo.onloadedmetadata = () => {
+        if (startPosition > 0 && netflixVideo.duration && netflixVideo.duration !== Infinity) {
+            netflixVideo.currentTime = startPosition;
+        }
+        netflixVideo.play().catch(() => {
+            console.log("Auto-play bloqueado pelo navegador, aguardando clique.");
+        });
+    };
+
+    clearInterval(netflixState.historySaveInterval);
+    netflixState.historySaveInterval = setInterval(() => {
+        if (!netflixVideo.paused && netflixVideo.currentTime > 0) {
+            const pos = netflixVideo.currentTime;
+            const dur = netflixVideo.duration || 0.0;
+            
+            fetch('/api/m3u/history/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: channel.name,
+                    logo: channel.logo,
+                    group: channel.group,
+                    url: channel.url,
+                    position: pos,
+                    duration: dur === Infinity ? 0.0 : dur
+                })
+            }).catch(() => {});
+        }
+    }, 5000);
+}
+
+function closePlayer() {
+    if (!netflixVideo) return;
+    clearInterval(netflixState.historySaveInterval);
+    netflixVideo.pause();
+    
+    if (netflixState.hlsInstance) {
+        netflixState.hlsInstance.destroy();
+        netflixState.hlsInstance = null;
+    }
+    
+    netflixVideo.src = "";
+    if (netflixPlayerModal) netflixPlayerModal.classList.add('hidden');
+    netflixState.currentVideoInfo = null;
+    
+    renderShelves();
+}
+
+// Inicializa a escuta dos eventos do Cine Casa
+setupNetflixEvents();
