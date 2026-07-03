@@ -1641,5 +1641,4 @@ function closeSeriesDetails() {
     seriesEpisodesData = [];
 }
 
-// Inicializa a escuta dos eventos do Cine Casa
-setupNetflixEvents();
+
