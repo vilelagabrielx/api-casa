@@ -10,7 +10,7 @@ import numpy as np
 import yt_dlp
 import sqlite3
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 import re
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -812,6 +812,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.handle_m3u_category()
         elif parsed_path.path == '/api/m3u/history':
             self.handle_m3u_history()
+        elif parsed_path.path == '/api/m3u/history/position':
+            self.handle_m3u_history_position()
         elif parsed_path.path == '/api/m3u/series/episodes':
             self.handle_m3u_series_episodes()
         elif parsed_path.path.startswith('/api/'):
@@ -1371,6 +1373,26 @@ class BulbHandler(SimpleHTTPRequestHandler):
             conn.commit()
             conn.close()
             self.send_json_response({"success": True})
+        except Exception as e:
+            self.send_error_response(str(e))
+
+    def handle_m3u_history_position(self):
+        try:
+            parsed = urlparse(self.path)
+            queries = parse_qs(parsed.query)
+            url = queries.get('url', [''])[0].strip()
+            
+            if not url:
+                raise Exception("URL de stream inválida.")
+                
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT position FROM history WHERE url = ?", (url,))
+            row = cursor.fetchone()
+            conn.close()
+            
+            pos = row[0] if row else 0.0
+            self.send_json_response({"success": True, "position": pos})
         except Exception as e:
             self.send_error_response(str(e))
 

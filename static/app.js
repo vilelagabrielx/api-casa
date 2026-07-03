@@ -1452,14 +1452,33 @@ function playVideo(channel, startPosition = 0) {
         netflixVideo.src = channel.url;
     }
     
-    netflixVideo.onloadedmetadata = () => {
-        if (startPosition > 0 && netflixVideo.duration && netflixVideo.duration !== Infinity) {
-            netflixVideo.currentTime = startPosition;
-        }
-        netflixVideo.play().catch(() => {
-            console.log("Auto-play bloqueado pelo navegador, aguardando clique.");
-        });
+    let finalStartPos = startPosition;
+    const applyPlayback = (pos) => {
+        netflixVideo.onloadedmetadata = () => {
+            if (pos > 0 && netflixVideo.duration && netflixVideo.duration !== Infinity) {
+                netflixVideo.currentTime = pos;
+            }
+            netflixVideo.play().catch(() => {
+                console.log("Auto-play bloqueado pelo navegador, aguardando clique.");
+            });
+        };
     };
+    
+    if (finalStartPos === 0) {
+        fetch(`/api/m3u/history/position?url=${encodeURIComponent(channel.url)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.position > 0) {
+                finalStartPos = data.position;
+            }
+            applyPlayback(finalStartPos);
+        })
+        .catch(() => {
+            applyPlayback(0);
+        });
+    } else {
+        applyPlayback(finalStartPos);
+    }
 
     clearInterval(netflixState.historySaveInterval);
     netflixState.historySaveInterval = setInterval(() => {
