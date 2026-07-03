@@ -552,6 +552,9 @@ setupEventListeners = function() {
         }
     });
 
+    // Configura eventos do Cine Casa (IPTV)
+    setupNetflixEvents();
+
     // Inicia loops de sincronização com o servidor (polling)
     setInterval(fetchMusicStatus, 300); // Polling rápido para manter áudio local sincronizado
     setInterval(fetchMusicQueue, 2000); // Fila atualiza mais lentamente

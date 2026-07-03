@@ -11,6 +11,7 @@ import yt_dlp
 import sqlite3
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
+import re
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'static', 'cache', 'iptv_catalog.db')
