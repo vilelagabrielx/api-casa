@@ -12,7 +12,8 @@ import sqlite3
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-DB_PATH = 'static/cache/iptv_catalog.db'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'static', 'cache', 'iptv_catalog.db')
 
 def parse_m3u_content(m3u_text):
     import re
@@ -83,7 +84,7 @@ def parse_series_info(name):
     return False, name_clean, None, None, ""
 
 def init_db():
-    os.makedirs('static/cache', exist_ok=True)
+    os.makedirs(os.path.join(BASE_DIR, 'static', 'cache'), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -1330,16 +1331,17 @@ if __name__ == "__main__":
 
     # Limpa apenas os arquivos .wav temporários na inicialização para poupar espaço,
     # preservando o arquivo .db de catálogo e histórico.
-    if os.path.exists('static/cache'):
+    cache_dir = os.path.join(BASE_DIR, 'static', 'cache')
+    if os.path.exists(cache_dir):
         try:
-            for item in os.listdir('static/cache'):
+            for item in os.listdir(cache_dir):
                 if item.endswith('.wav'):
-                    os.remove(os.path.join('static/cache', item))
+                    os.remove(os.path.join(cache_dir, item))
             print("[Limpeza] Arquivos .wav de cache temporário limpos na inicialização.")
         except Exception as e:
             print("Erro ao limpar cache inicial de áudio:", e)
     else:
-        os.makedirs('static/cache', exist_ok=True)
+        os.makedirs(cache_dir, exist_ok=True)
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), BulbHandler)
     print(f"API e Website rodando em http://localhost:{PORT}")
