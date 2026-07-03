@@ -30,6 +30,9 @@ def parse_m3u_content(m3u_text):
         line = line.strip()
         if not line:
             continue
+        # Ignora cabeçalhos e separadores de requisições multipart/form-data
+        if line.startswith('------') or line.startswith('--') or line.startswith('Content-') or line.startswith('content-'):
+            continue
         if line.startswith("#EXTINF:"):
             # Extrai o nome (tudo após a última vírgula)
             comma_idx = line.rfind(',')
