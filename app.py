@@ -1181,7 +1181,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
                     position = excluded.position,
                     duration = excluded.duration,
                     last_watched = excluded.last_watched
-            ''')
+            ''', (name, logo, group, url, position, duration))
             conn.commit()
             conn.close()
             self.send_json_response({"success": True})
