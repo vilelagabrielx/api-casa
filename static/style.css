@@ -29,12 +29,10 @@ body {
     background-color: var(--bg-dark);
     color: var(--text-primary);
     min-height: 100vh;
-    display: flex;
-    justify-content: center;
-    align-items: center;
+    overflow-y: auto;
     overflow-x: hidden;
     position: relative;
-    padding: 20px;
+    padding: 40px 20px;
 }
 
 /* Background animated glow */
@@ -55,6 +53,7 @@ body {
 .container {
     width: 100%;
     max-width: 440px;
+    margin: 0 auto;
     display: flex;
     flex-direction: column;
     gap: 24px;
