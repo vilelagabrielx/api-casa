@@ -1245,11 +1245,9 @@ class BulbHandler(SimpleHTTPRequestHandler):
             query_sql = f"SELECT id, name, logo, group_title, url, is_series, series_name, poster_path, backdrop_path, overview, rating, tmdb_queried FROM ({subquery}){where_sql} ORDER BY name ASC LIMIT ? OFFSET ?"
             cursor.execute(query_sql, params + [limit, offset])
             rows = cursor.fetchall()
-            conn.close()
             
             channels = []
-            conn_write = None
-            cursor_write = None
+            has_updates = False
             
             for r in rows:
                 ch_id = r[0]
@@ -1269,28 +1267,27 @@ class BulbHandler(SimpleHTTPRequestHandler):
                     search_name = series_name if is_series else ch_name
                     meta = fetch_tmdb_metadata(search_name, is_series == 1)
                     
-                    if not conn_write:
-                        conn_write = sqlite3.connect(DB_PATH)
-                        cursor_write = conn_write.cursor()
-                        
                     if meta:
                         poster = meta['poster']
                         backdrop = meta['backdrop']
                         overview = meta['overview']
                         rating = meta['rating']
                         
+                    # Executa a escrita usando o mesmo cursor/conexão existente
+                    write_cursor = conn.cursor()
                     if is_series == 1:
-                        cursor_write.execute('''
+                        write_cursor.execute('''
                             UPDATE channels 
                             SET poster_path = ?, backdrop_path = ?, overview = ?, rating = ?, tmdb_queried = 1 
                             WHERE series_name = ?
                         ''', (poster, backdrop, overview, rating, series_name))
                     else:
-                        cursor_write.execute('''
+                        write_cursor.execute('''
                             UPDATE channels 
                             SET poster_path = ?, backdrop_path = ?, overview = ?, rating = ?, tmdb_queried = 1 
                             WHERE id = ?
                         ''', (poster, backdrop, overview, rating, ch_id))
+                    has_updates = True
                         
                 channels.append({
                     "id": ch_id,
@@ -1306,9 +1303,9 @@ class BulbHandler(SimpleHTTPRequestHandler):
                     "rating": rating
                 })
                 
-            if conn_write:
-                conn_write.commit()
-                conn_write.close()
+            if has_updates:
+                conn.commit()
+            conn.close()
                 
             self.send_json_response({
                 "success": True,
