@@ -305,70 +305,71 @@
                 </div>
             </div>
 
-            <!-- Full-screen custom Player Overlay -->
-            <div id="netflix-player-modal" class="player-modal hidden">
-                <button class="player-close-btn" id="btn-close-player" aria-label="Fechar Player">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                </button>
-                <div class="player-wrapper">
-                    <video id="netflix-video" controls autoplay playsinline></video>
-                </div>
-            </div>
-
-            <!-- Series Details Modal -->
-            <div id="netflix-series-modal" class="series-modal hidden">
-                <div class="series-modal-content">
-                    <button class="series-close-btn" id="btn-close-series" aria-label="Fechar Detalhes">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                            <line x1="18" y1="6" x2="6" y2="18" />
-                            <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
-                    </button>
-                    
-                    <div class="series-header-banner">
-                        <div class="series-banner-bg" id="series-banner-bg"></div>
-                        <div class="series-banner-overlay"></div>
-                        <div class="series-banner-info">
-                            <span class="series-badge">Série</span>
-                            <h2 id="series-modal-title">Nome da Série</h2>
-                            <p id="series-modal-group">Categoria</p>
-                        </div>
-                    </div>
-                    
-                    <div class="series-body">
-                        <!-- TMDb Overview & Rating -->
-                        <div class="series-meta-info">
-                            <div class="series-rating-row">
-                                <span class="rating-stars" id="series-modal-rating-stars"></span>
-                                <span class="rating-number" id="series-modal-rating-num"></span>
-                            </div>
-                            <p class="series-overview" id="series-modal-overview"></p>
-                        </div>
-                        
-                        <div class="series-controls">
-                            <label for="series-season-select">Temporada:</label>
-                            <select id="series-season-select" class="custom-select">
-                                <!-- Populado dinamicamente -->
-                            </select>
-                        </div>
-                        
-                        <div class="series-episodes-container">
-                            <div class="series-episodes-grid" id="series-episodes-grid">
-                                <!-- Populado dinamicamente -->
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
         </main>
         
         <!-- Footer -->
         <footer class="app-footer">
             <p>Servidor local no Termux &bull; Lâmpada IP: 192.168.1.101</p>
         </footer>
+    </div>
+
+    <!-- Full-screen custom Player Overlay (Moved to body level to escape transform/filter container bounds) -->
+    <div id="netflix-player-modal" class="player-modal hidden">
+        <button class="player-close-btn" id="btn-close-player" aria-label="Fechar Player">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+        </button>
+        <div class="player-wrapper">
+            <video id="netflix-video" controls autoplay playsinline></video>
+        </div>
+    </div>
+
+    <!-- Series Details Modal (Moved to body level to escape transform/filter container bounds) -->
+    <div id="netflix-series-modal" class="series-modal hidden">
+        <div class="series-modal-content">
+            <button class="series-close-btn" id="btn-close-series" aria-label="Fechar Detalhes">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+            </button>
+            
+            <div class="series-header-banner">
+                <div class="series-banner-bg" id="series-banner-bg"></div>
+                <div class="series-banner-overlay"></div>
+                <div class="series-banner-info">
+                    <span class="series-badge">Série</span>
+                    <h2 id="series-modal-title">Nome da Série</h2>
+                    <p id="series-modal-group">Categoria</p>
+                </div>
+            </div>
+            
+            <div class="series-body">
+                <!-- TMDb Overview & Rating -->
+                <div class="series-meta-info">
+                    <div class="series-rating-row">
+                        <span class="rating-stars" id="series-modal-rating-stars"></span>
+                        <span class="rating-number" id="series-modal-rating-num"></span>
+                    </div>
+                    <p class="series-overview" id="series-modal-overview"></p>
+                </div>
+                
+                <div class="series-controls">
+                    <label for="series-season-select">Temporada:</label>
+                    <select id="series-season-select" class="custom-select">
+                        <!-- Populado dinamicamente -->
+                    </select>
+                </div>
+                
+                <div class="series-episodes-container">
+                    <div class="series-episodes-grid" id="series-episodes-grid">
+                        <!-- Populado dinamicamente -->
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="app.js"></script>
