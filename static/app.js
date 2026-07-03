@@ -1435,6 +1435,36 @@ function playVideo(channel, startPosition = 0) {
             });
         };
         
+        netflixVideo.onended = () => {
+            if (netflixState.currentSeriesEpisodes && netflixState.currentSeriesEpisodes.length > 0 && netflixState.currentEpisode) {
+                const currentEp = netflixState.currentEpisode;
+                
+                const sortedEps = [...netflixState.currentSeriesEpisodes].sort((a, b) => {
+                    if (a.season !== b.season) return a.season - b.season;
+                    return a.episode - b.episode;
+                });
+                
+                const idx = sortedEps.findIndex(ep => ep.season === currentEp.season && ep.episode === currentEp.episode);
+                
+                if (idx !== -1 && idx + 1 < sortedEps.length) {
+                    const nextEp = sortedEps[idx + 1];
+                    netflixState.currentEpisode = nextEp;
+                    
+                    const nextChannelMock = {
+                        name: `${netflixState.currentSeriesName} S0${nextEp.season}E${String(nextEp.episode).padStart(2, '0')}`,
+                        logo: nextEp.logo || channel.logo,
+                        group: channel.group,
+                        url: nextEp.url
+                    };
+                    
+                    console.log(`[Auto-Play] Próximo episódio: T${nextEp.season} E${nextEp.episode}`);
+                    playVideo(nextChannelMock);
+                    return;
+                }
+            }
+            closePlayer();
+        };
+        
         if (isTS && typeof mpegts !== 'undefined' && mpegts.getFeatureList().mseLivePlayback) {
             const mpegtsPlayer = mpegts.createPlayer({
                 type: 'mse',
@@ -1513,6 +1543,12 @@ function closePlayer() {
     }
     
     netflixVideo.src = "";
+    
+    // Reseta estado de autoplay do episódio
+    netflixState.currentSeriesEpisodes = null;
+    netflixState.currentSeriesName = null;
+    netflixState.currentEpisode = null;
+    
     if (netflixPlayerModal) netflixPlayerModal.classList.add('hidden');
     netflixState.currentVideoInfo = null;
     
@@ -1625,6 +1661,9 @@ function renderActiveSeasonEpisodes(seasonNum) {
         };
         
         row.addEventListener('click', () => {
+            netflixState.currentSeriesEpisodes = seriesEpisodesData;
+            netflixState.currentSeriesName = seriesModalTitle.textContent;
+            netflixState.currentEpisode = ep;
             playVideo(channelMock);
         });
         
