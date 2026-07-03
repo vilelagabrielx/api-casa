@@ -435,11 +435,14 @@ setupEventListeners = function() {
             tab.classList.add('active');
             
             const targetNav = tab.getAttribute('data-nav');
+            const mainContainer = document.querySelector('.container');
             if (targetNav === 'lights') {
+                if (mainContainer) mainContainer.classList.remove('netflix-mode');
                 sectionLights.style.display = 'block';
                 sectionMusic.style.display = 'none';
                 sectionNetflix.style.display = 'none';
             } else if (targetNav === 'music') {
+                if (mainContainer) mainContainer.classList.remove('netflix-mode');
                 sectionLights.style.display = 'none';
                 sectionMusic.style.display = 'block';
                 sectionNetflix.style.display = 'none';
@@ -447,6 +450,7 @@ setupEventListeners = function() {
                 fetchMusicStatus();
                 fetchMusicQueue();
             } else if (targetNav === 'netflix') {
+                if (mainContainer) mainContainer.classList.add('netflix-mode');
                 sectionLights.style.display = 'none';
                 sectionMusic.style.display = 'none';
                 sectionNetflix.style.display = 'block';

@@ -59,6 +59,11 @@ body {
     flex-direction: column;
     gap: 24px;
     z-index: 1;
+    transition: max-width 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.container.netflix-mode {
+    max-width: 1000px;
 }
 
 /* Header styling */
@@ -1820,4 +1825,9 @@ body {
     .episode-meta {
         font-size: 0.7rem;
     }
+}
+
+/* Classes Utilitárias */
+.hidden {
+    display: none !important;
 }
