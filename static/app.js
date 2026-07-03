@@ -1409,51 +1409,23 @@ function playVideo(channel, startPosition = 0) {
     netflixState.currentVideoInfo = channel;
     netflixPlayerModal.classList.remove('hidden');
     
-    // Limpa instancias anteriores
-    if (netflixState.hlsInstance) {
-        netflixState.hlsInstance.destroy();
-        netflixState.hlsInstance = null;
-    }
-    if (netflixState.mpegtsInstance) {
-        netflixState.mpegtsInstance.destroy();
-        netflixState.mpegtsInstance = null;
-    }
-    
-    netflixVideo.src = "";
-    
-    const urlLower = channel.url.toLowerCase();
-    const isM3U8 = urlLower.includes('.m3u8');
-    const isTS = urlLower.includes('.ts') || urlLower.includes('output=ts') || urlLower.includes('output=mpegts');
-    
-    if (isTS && typeof mpegts !== 'undefined' && mpegts.getFeatureList().mseLivePlayback) {
-        const mpegtsPlayer = mpegts.createPlayer({
-            type: 'mse',
-            isLive: true,
-            url: channel.url
-        });
-        netflixState.mpegtsInstance = mpegtsPlayer;
-        mpegtsPlayer.attachMediaElement(netflixVideo);
-        mpegtsPlayer.load();
-    } else if (isM3U8) {
-        if (netflixVideo.canPlayType('application/vnd.apple.mpegurl')) {
-            netflixVideo.src = channel.url;
-        } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-            const hls = new Hls({
-                maxMaxBufferLength: 10,
-                enableWorker: true
-            });
-            netflixState.hlsInstance = hls;
-            hls.loadSource(channel.url);
-            hls.attachMedia(netflixVideo);
-        } else {
-            netflixVideo.src = channel.url;
+    const initPlayer = (pos) => {
+        // Limpa instancias anteriores
+        if (netflixState.hlsInstance) {
+            netflixState.hlsInstance.destroy();
+            netflixState.hlsInstance = null;
         }
-    } else {
-        netflixVideo.src = channel.url;
-    }
-    
-    let finalStartPos = startPosition;
-    const applyPlayback = (pos) => {
+        if (netflixState.mpegtsInstance) {
+            netflixState.mpegtsInstance.destroy();
+            netflixState.mpegtsInstance = null;
+        }
+        
+        netflixVideo.src = "";
+        
+        const urlLower = channel.url.toLowerCase();
+        const isM3U8 = urlLower.includes('.m3u8');
+        const isTS = urlLower.includes('.ts') || urlLower.includes('output=ts') || urlLower.includes('output=mpegts');
+        
         netflixVideo.onloadedmetadata = () => {
             if (pos > 0 && netflixVideo.duration && netflixVideo.duration !== Infinity) {
                 netflixVideo.currentTime = pos;
@@ -1462,22 +1434,46 @@ function playVideo(channel, startPosition = 0) {
                 console.log("Auto-play bloqueado pelo navegador, aguardando clique.");
             });
         };
+        
+        if (isTS && typeof mpegts !== 'undefined' && mpegts.getFeatureList().mseLivePlayback) {
+            const mpegtsPlayer = mpegts.createPlayer({
+                type: 'mse',
+                isLive: true,
+                url: channel.url
+            });
+            netflixState.mpegtsInstance = mpegtsPlayer;
+            mpegtsPlayer.attachMediaElement(netflixVideo);
+            mpegtsPlayer.load();
+        } else if (isM3U8) {
+            if (netflixVideo.canPlayType('application/vnd.apple.mpegurl')) {
+                netflixVideo.src = channel.url;
+            } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                const hls = new Hls({
+                    maxMaxBufferLength: 10,
+                    enableWorker: true
+                });
+                netflixState.hlsInstance = hls;
+                hls.loadSource(channel.url);
+                hls.attachMedia(netflixVideo);
+            } else {
+                netflixVideo.src = channel.url;
+            }
+        } else {
+            netflixVideo.src = channel.url;
+        }
     };
     
-    if (finalStartPos === 0) {
+    if (startPosition === 0) {
         fetch(`/api/m3u/history/position?url=${encodeURIComponent(channel.url)}`)
         .then(r => r.json())
         .then(data => {
-            if (data.success && data.position > 0) {
-                finalStartPos = data.position;
-            }
-            applyPlayback(finalStartPos);
+            initPlayer(data.success && data.position > 0 ? data.position : 0);
         })
         .catch(() => {
-            applyPlayback(0);
+            initPlayer(0);
         });
     } else {
-        applyPlayback(finalStartPos);
+        initPlayer(startPosition);
     }
 
     clearInterval(netflixState.historySaveInterval);
