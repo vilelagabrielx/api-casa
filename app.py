@@ -135,6 +135,67 @@ def fetch_tmdb_metadata(name, is_series=False):
         
     return None
 
+import queue
+tmdb_queue = queue.Queue()
+
+def tmdb_worker():
+    while True:
+        try:
+            item = tmdb_queue.get()
+            if item is None:
+                break
+            ch_id, ch_name, is_series, series_name = item
+            
+            # Conecta usando timeout para evitar lock concorrente
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
+            cursor = conn.cursor()
+            
+            if is_series == 1:
+                cursor.execute("SELECT tmdb_queried FROM channels WHERE series_name = ? LIMIT 1", (series_name,))
+            else:
+                cursor.execute("SELECT tmdb_queried FROM channels WHERE id = ?", (ch_id,))
+            row = cursor.fetchone()
+            
+            if row and row[0] == 1:
+                conn.close()
+                tmdb_queue.task_done()
+                continue
+                
+            search_name = series_name if is_series == 1 else ch_name
+            meta = fetch_tmdb_metadata(search_name, is_series == 1)
+            
+            poster = ""
+            backdrop = ""
+            overview = ""
+            rating = 0.0
+            
+            if meta:
+                poster = meta['poster']
+                backdrop = meta['backdrop']
+                overview = meta['overview']
+                rating = meta['rating']
+                
+            if is_series == 1:
+                cursor.execute('''
+                    UPDATE channels 
+                    SET poster_path = ?, backdrop_path = ?, overview = ?, rating = ?, tmdb_queried = 1 
+                    WHERE series_name = ?
+                ''', (poster, backdrop, overview, rating, series_name))
+            else:
+                cursor.execute('''
+                    UPDATE channels 
+                    SET poster_path = ?, backdrop_path = ?, overview = ?, rating = ?, tmdb_queried = 1 
+                    WHERE id = ?
+                ''', (poster, backdrop, overview, rating, ch_id))
+                
+            conn.commit()
+            conn.close()
+            time.sleep(0.15) # Evita sobrecarga de requisições à API
+        except Exception as e:
+            print("[TMDb Background] Erro no worker:", e)
+        finally:
+            tmdb_queue.task_done()
+
 def init_db():
     os.makedirs(os.path.join(BASE_DIR, 'static', 'cache'), exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
@@ -1245,10 +1306,9 @@ class BulbHandler(SimpleHTTPRequestHandler):
             query_sql = f"SELECT id, name, logo, group_title, url, is_series, series_name, poster_path, backdrop_path, overview, rating, tmdb_queried FROM ({subquery}){where_sql} ORDER BY name ASC LIMIT ? OFFSET ?"
             cursor.execute(query_sql, params + [limit, offset])
             rows = cursor.fetchall()
+            conn.close()
             
             channels = []
-            has_updates = False
-            
             for r in rows:
                 ch_id = r[0]
                 ch_name = r[1]
@@ -1264,31 +1324,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 tmdb_queried = r[11]
                 
                 if tmdb_queried == 0:
-                    search_name = series_name if is_series else ch_name
-                    meta = fetch_tmdb_metadata(search_name, is_series == 1)
+                    tmdb_queue.put((ch_id, ch_name, is_series, series_name))
                     
-                    if meta:
-                        poster = meta['poster']
-                        backdrop = meta['backdrop']
-                        overview = meta['overview']
-                        rating = meta['rating']
-                        
-                    # Executa a escrita usando o mesmo cursor/conexão existente
-                    write_cursor = conn.cursor()
-                    if is_series == 1:
-                        write_cursor.execute('''
-                            UPDATE channels 
-                            SET poster_path = ?, backdrop_path = ?, overview = ?, rating = ?, tmdb_queried = 1 
-                            WHERE series_name = ?
-                        ''', (poster, backdrop, overview, rating, series_name))
-                    else:
-                        write_cursor.execute('''
-                            UPDATE channels 
-                            SET poster_path = ?, backdrop_path = ?, overview = ?, rating = ?, tmdb_queried = 1 
-                            WHERE id = ?
-                        ''', (poster, backdrop, overview, rating, ch_id))
-                    has_updates = True
-                        
                 channels.append({
                     "id": ch_id,
                     "name": ch_name,
@@ -1302,10 +1339,6 @@ class BulbHandler(SimpleHTTPRequestHandler):
                     "overview": overview,
                     "rating": rating
                 })
-                
-            if has_updates:
-                conn.commit()
-            conn.close()
                 
             self.send_json_response({
                 "success": True,
@@ -1455,6 +1488,10 @@ class BulbHandler(SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     # Inicializa o banco de dados SQLite para IPTV e histórico
     init_db()
+
+    # Inicia thread em segundo plano para consultas à API do TMDb
+    threading.Thread(target=tmdb_worker, daemon=True).start()
+    print("[TMDb] Thread do worker em segundo plano iniciada.")
 
     # Limpa apenas os arquivos .wav temporários na inicialização para poupar espaço,
     # preservando o arquivo .db de catálogo e histórico.
