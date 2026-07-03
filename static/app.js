@@ -1249,10 +1249,11 @@ function createVideoCard(channel, progress = null) {
     const card = document.createElement('div');
     card.className = "video-card";
     
-    if (channel.logo && channel.logo.startsWith('http')) {
+    const imgUrl = channel.poster_path || channel.logo;
+    if (imgUrl && imgUrl.startsWith('http')) {
         const img = document.createElement('img');
         img.className = "card-logo";
-        img.src = channel.logo;
+        img.src = imgUrl;
         img.alt = channel.name;
         img.onerror = () => {
             img.remove();
@@ -1268,7 +1269,6 @@ function createVideoCard(channel, progress = null) {
         card.appendChild(createCardPlaceholderDOM(channel));
     }
     
-    // Adiciona barra de progresso do Continuar Assistindo se disponível
     if (progress && progress.duration > 0) {
         const pct = (progress.position / progress.duration) * 100;
         const progressEl = document.createElement('div');
@@ -1279,7 +1279,14 @@ function createVideoCard(channel, progress = null) {
     
     card.addEventListener('click', () => {
         if (channel.is_series === 1) {
-            openSeriesDetails(channel.series_name || channel.name, channel.logo, channel.group);
+            openSeriesDetails(
+                channel.series_name || channel.name, 
+                channel.logo, 
+                channel.group, 
+                channel.backdrop_path, 
+                channel.overview, 
+                channel.rating
+            );
         } else {
             playVideo(channel, progress ? progress.position : 0);
         }
@@ -1494,16 +1501,38 @@ function closePlayer() {
     renderShelves();
 }
 
-function openSeriesDetails(seriesName, logo, group) {
+function openSeriesDetails(seriesName, logo, group, backdrop = "", overview = "", rating = 0.0) {
     if (!netflixSeriesModal) return;
     
     seriesModalTitle.textContent = seriesName;
     seriesModalGroup.textContent = group;
     
-    if (logo && logo.startsWith('http')) {
-        seriesBannerBg.style.backgroundImage = `url('${logo}')`;
+    const bgUrl = backdrop || logo;
+    if (bgUrl && bgUrl.startsWith('http')) {
+        seriesBannerBg.style.backgroundImage = `url('${bgUrl}')`;
     } else {
         seriesBannerBg.style.backgroundImage = `linear-gradient(135deg, #1e1b4b 0%, #020617 100%)`;
+    }
+    
+    const ratingStarsEl = document.getElementById('series-modal-rating-stars');
+    const ratingNumEl = document.getElementById('series-modal-rating-num');
+    const overviewEl = document.getElementById('series-modal-overview');
+    
+    if (ratingStarsEl && ratingNumEl) {
+        if (rating > 0) {
+            const numStars = Math.round(rating / 2);
+            ratingStarsEl.textContent = "⭐".repeat(numStars) + "☆".repeat(5 - numStars);
+            ratingNumEl.textContent = `${rating.toFixed(1)}/10`;
+            ratingStarsEl.style.display = "inline-block";
+            ratingNumEl.style.display = "inline-block";
+        } else {
+            ratingStarsEl.style.display = "none";
+            ratingNumEl.style.display = "none";
+        }
+    }
+    
+    if (overviewEl) {
+        overviewEl.textContent = overview || "Nenhuma sinopse disponível em português para este título.";
     }
     
     seriesEpisodesGrid.innerHTML = "<p style='padding:20px; color:var(--text-secondary);'>Carregando episódios...</p>";

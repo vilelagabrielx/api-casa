@@ -1832,6 +1832,42 @@ body {
     }
 }
 
+/* TMDb Metadata Styles */
+.series-meta-info {
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.series-rating-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.rating-stars {
+    color: #fbbf24;
+    font-size: 1rem;
+    letter-spacing: 2px;
+}
+
+.rating-number {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.series-overview {
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
 /* Classes Utilitárias */
 .hidden {
     display: none !important;

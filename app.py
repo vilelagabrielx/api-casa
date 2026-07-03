@@ -83,6 +83,54 @@ def parse_series_info(name):
             return True, series_name, season, episode, episode_name
     return False, name_clean, None, None, ""
 
+TMDB_API_KEY = "1b2cfb122931d6b75a3fd3e29143152f"
+
+def fetch_tmdb_metadata(name, is_series=False):
+    import urllib.request
+    import urllib.parse
+    import json
+    
+    query = name.strip()
+    # Limpa termos redundantes
+    query = re.sub(r'\s*\(\d{4}\)\s*$', '', query)
+    query = re.sub(r'\s*HD\s*$', '', query, flags=re.IGNORECASE)
+    query = re.sub(r'\s*FHD\s*$', '', query, flags=re.IGNORECASE)
+    query = re.sub(r'\s*4K\s*$', '', query, flags=re.IGNORECASE)
+    query = query.strip()
+    
+    if not query:
+        return None
+        
+    encoded_query = urllib.parse.quote(query)
+    endpoint = "tv" if is_series else "multi"
+    url = f"https://api.themoviedb.org/3/search/{endpoint}?api_key={TMDB_API_KEY}&language=pt-BR&query={encoded_query}"
+    
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            results = data.get('results', [])
+            if results:
+                first = results[0]
+                poster_path = first.get('poster_path')
+                backdrop_path = first.get('backdrop_path')
+                
+                poster = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else ""
+                backdrop = f"https://image.tmdb.org/t/p/w1280{backdrop_path}" if backdrop_path else ""
+                overview = first.get('overview', '').strip()
+                rating = float(first.get('vote_average', 0.0))
+                
+                return {
+                    "poster": poster,
+                    "backdrop": backdrop,
+                    "overview": overview,
+                    "rating": rating
+                }
+    except Exception as e:
+        print(f"[TMDb] Erro ao consultar metadados para '{name}':", e)
+        
+    return None
+
 def init_db():
     os.makedirs(os.path.join(BASE_DIR, 'static', 'cache'), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -90,13 +138,13 @@ def init_db():
     
     # Migração automática do schema anterior do banco de dados
     try:
-        cursor.execute("SELECT is_series FROM channels LIMIT 1")
+        cursor.execute("SELECT tmdb_queried FROM channels LIMIT 1")
     except sqlite3.OperationalError:
-        # Coluna is_series não encontrada, reconstrói a tabela para aplicar o novo schema
+        # Coluna tmdb_queried não encontrada, reconstrói a tabela para aplicar o novo schema
         cursor.execute("DROP TABLE IF EXISTS channels")
-        print("[Banco de Dados] Tabela channels antiga removida para migração de séries.")
+        print("[Banco de Dados] Tabela channels antiga removida para migração do TMDb.")
         
-    # Canais de IPTV analisados (com suporte a séries)
+    # Canais de IPTV analisados (com suporte a séries e TMDb)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS channels (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,7 +156,12 @@ def init_db():
             series_name TEXT,
             season INTEGER,
             episode INTEGER,
-            episode_name TEXT
+            episode_name TEXT,
+            poster_path TEXT,
+            backdrop_path TEXT,
+            overview TEXT,
+            rating REAL,
+            tmdb_queried INTEGER DEFAULT 0
         )
     ''')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_group ON channels(group_title)')
@@ -1166,13 +1219,13 @@ class BulbHandler(SimpleHTTPRequestHandler):
             
             # Consulta combinada
             subquery = '''
-                SELECT id, name, logo, group_title, url, 0 AS is_series, NULL AS series_name 
+                SELECT id, name, logo, group_title, url, 0 AS is_series, NULL AS series_name, poster_path, backdrop_path, overview, rating, tmdb_queried
                 FROM channels 
                 WHERE is_series = 0
                 
                 UNION ALL
                 
-                SELECT MIN(id) as id, series_name as name, logo, group_title, '' as url, 1 as is_series, series_name
+                SELECT MIN(id) as id, series_name as name, logo, group_title, '' as url, 1 as is_series, series_name, poster_path, backdrop_path, overview, rating, tmdb_queried
                 FROM channels 
                 WHERE is_series = 1 
                 GROUP BY series_name
@@ -1183,22 +1236,73 @@ class BulbHandler(SimpleHTTPRequestHandler):
             total = cursor.fetchone()[0]
             
             # Busca canais paginados
-            query_sql = f"SELECT id, name, logo, group_title, url, is_series, series_name FROM ({subquery}){where_sql} ORDER BY name ASC LIMIT ? OFFSET ?"
+            query_sql = f"SELECT id, name, logo, group_title, url, is_series, series_name, poster_path, backdrop_path, overview, rating, tmdb_queried FROM ({subquery}){where_sql} ORDER BY name ASC LIMIT ? OFFSET ?"
             cursor.execute(query_sql, params + [limit, offset])
             rows = cursor.fetchall()
             conn.close()
             
             channels = []
+            conn_write = None
+            cursor_write = None
+            
             for r in rows:
+                ch_id = r[0]
+                ch_name = r[1]
+                ch_logo = r[2]
+                ch_group = r[3]
+                ch_url = r[4]
+                is_series = r[5]
+                series_name = r[6]
+                poster = r[7] or ""
+                backdrop = r[8] or ""
+                overview = r[9] or ""
+                rating = r[10] or 0.0
+                tmdb_queried = r[11]
+                
+                if tmdb_queried == 0:
+                    search_name = series_name if is_series else ch_name
+                    meta = fetch_tmdb_metadata(search_name, is_series == 1)
+                    
+                    if not conn_write:
+                        conn_write = sqlite3.connect(DB_PATH)
+                        cursor_write = conn_write.cursor()
+                        
+                    if meta:
+                        poster = meta['poster']
+                        backdrop = meta['backdrop']
+                        overview = meta['overview']
+                        rating = meta['rating']
+                        
+                    if is_series == 1:
+                        cursor_write.execute('''
+                            UPDATE channels 
+                            SET poster_path = ?, backdrop_path = ?, overview = ?, rating = ?, tmdb_queried = 1 
+                            WHERE series_name = ?
+                        ''', (poster, backdrop, overview, rating, series_name))
+                    else:
+                        cursor_write.execute('''
+                            UPDATE channels 
+                            SET poster_path = ?, backdrop_path = ?, overview = ?, rating = ?, tmdb_queried = 1 
+                            WHERE id = ?
+                        ''', (poster, backdrop, overview, rating, ch_id))
+                        
                 channels.append({
-                    "id": r[0],
-                    "name": r[1],
-                    "logo": r[2],
-                    "group": r[3],
-                    "url": r[4],
-                    "is_series": r[5],
-                    "series_name": r[6]
+                    "id": ch_id,
+                    "name": ch_name,
+                    "logo": ch_logo,
+                    "group": ch_group,
+                    "url": ch_url,
+                    "is_series": is_series,
+                    "series_name": series_name,
+                    "poster_path": poster,
+                    "backdrop_path": backdrop,
+                    "overview": overview,
+                    "rating": rating
                 })
+                
+            if conn_write:
+                conn_write.commit()
+                conn_write.close()
                 
             self.send_json_response({
                 "success": True,
