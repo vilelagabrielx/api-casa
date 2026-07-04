@@ -10,8 +10,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
     <!-- iro.js Color Picker -->
     <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
-    <!-- Hls.js for IPTV / m3u8 streaming -->
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+    <!-- Video.js Player -->
+    <link href="https://vjs.zencdn.net/8.10.0/video-js.css" rel="stylesheet" />
+    <script src="https://vjs.zencdn.net/8.10.0/video.min.js"></script>
     <!-- Mpegts.js for IPTV / .ts streaming -->
     <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js"></script>
     <link rel="stylesheet" href="style.css">
@@ -266,36 +267,76 @@
 
             <!-- Netflix Catalog Screen -->
             <div id="netflix-catalog" class="catalog-container hidden">
-                <div class="catalog-header">
-                    <div class="catalog-search-bar">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon">
-                            <circle cx="11" cy="11" r="8" />
-                            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-                        </svg>
-                        <input type="text" id="netflix-search" placeholder="Buscar canal, filme ou série...">
+                <!-- Netflix Custom Premium Navbar -->
+                <div class="netflix-navbar">
+                    <div class="nav-left">
+                        <span class="netflix-logo">CINE CASA</span>
+                        <a href="#" class="nav-link active" id="nav-link-home">Início</a>
+                        <a href="#" class="nav-link" id="nav-link-series">Séries</a>
+                        <a href="#" class="nav-link" id="nav-link-movies">Filmes</a>
+                        <a href="#" class="nav-link" id="nav-link-favorites">Minha Lista</a>
                     </div>
-                    <button id="btn-change-playlist" class="text-btn outline-btn">Trocar Lista</button>
+                    <div class="nav-right">
+                        <div class="catalog-search-bar">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="search-icon">
+                                <circle cx="11" cy="11" r="8" />
+                                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                            </svg>
+                            <input type="text" id="netflix-search" placeholder="Canais, filmes, séries...">
+                        </div>
+                        <div class="nav-icon notification-bell" id="btn-notifications">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0" />
+                            </svg>
+                            <span class="notification-badge">3</span>
+                        </div>
+                        <div class="profile-menu-container">
+                            <div class="profile-avatar-wrapper" id="profile-avatar-btn">
+                                <img src="https://upload.wikimedia.org/wikipedia/commons/0/0b/Netflix-avatar.png" alt="Perfil Avatar" class="profile-avatar">
+                                <span class="caret"></span>
+                            </div>
+                            <div class="profile-dropdown hidden" id="profile-dropdown">
+                                <a href="#" class="dropdown-item" id="btn-profile-me">👤 Meu Perfil</a>
+                                <a href="#" class="dropdown-item" id="btn-profile-mylist">⭐ Minha Lista</a>
+                                <a href="#" class="dropdown-item" id="btn-change-playlist">🔄 Gerenciar Listas IPTV</a>
+                                <a href="#" class="dropdown-item" id="btn-profile-settings">⚙️ Configurações</a>
+                                <div class="dropdown-divider"></div>
+                                <a href="#" class="dropdown-item" id="btn-profile-logout">🚪 Sair</a>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- Category tags -->
-                <div class="category-tags" id="netflix-category-tags">
+                <!-- Category tags (Used in fallback filtering, styled beautifully) -->
+                <div class="category-tags hidden" id="netflix-category-tags">
                     <!-- Categories will be generated dynamically -->
                 </div>
 
                 <!-- Netflix Hero Banner -->
                 <div class="hero-banner" id="netflix-hero">
+                    <div class="hero-trailer-container" id="netflix-hero-trailer-container"></div>
                     <div class="hero-bg" id="netflix-hero-bg"></div>
                     <div class="hero-overlay"></div>
                     <div class="hero-content">
                         <span class="hero-badge" id="netflix-hero-category">Ao Vivo</span>
                         <h2 id="netflix-hero-title">Carregando...</h2>
                         <p id="netflix-hero-desc">Assista conteúdos e canais de TV IPTV diretamente no seu navegador com zero delay e sem precisar de apps adicionais.</p>
-                        <button id="btn-hero-play" class="hero-play-btn">
-                            <svg viewBox="0 0 24 24" fill="currentColor">
-                                <polygon points="5 3 19 12 5 21 5 3" />
-                            </svg>
-                            Assistir Agora
-                        </button>
+                        <div class="hero-buttons">
+                            <button id="btn-hero-play" class="hero-play-btn">
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    <polygon points="5 3 19 12 5 21 5 3" />
+                                </svg>
+                                <span>Assistir</span>
+                            </button>
+                            <button id="btn-hero-info" class="hero-info-btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <line x1="12" y1="16" x2="12" y2="12"/>
+                                    <line x1="12" y1="8" x2="12.01" y2="8"/>
+                                </svg>
+                                <span>Mais Informações</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -315,14 +356,14 @@
 
     <!-- Full-screen custom Player Overlay (Moved to body level to escape transform/filter container bounds) -->
     <div id="netflix-player-modal" class="player-modal hidden">
-        <button class="player-close-btn" id="btn-close-player" aria-label="Fechar Player">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
+        <button class="player-close-btn" id="btn-close-player" aria-label="Voltar" style="left: 40px; right: auto; border: none; background: transparent; box-shadow: none; display: flex; align-items: center; justify-content: center; width: 56px; height: 56px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="width: 32px; height: 32px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));">
+                <line x1="19" y1="12" x2="5" y2="12" />
+                <polyline points="12 19 5 12 12 5" />
             </svg>
         </button>
         <div class="player-wrapper">
-            <video id="netflix-video" controls autoplay playsinline></video>
+            <video id="netflix-video" class="video-js vjs-default-skin vjs-big-play-centered" playsinline></video>
         </div>
     </div>
 
@@ -366,6 +407,49 @@
                 <div class="series-episodes-container">
                     <div class="series-episodes-grid" id="series-episodes-grid">
                         <!-- Populado dinamicamente -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Playlists Manager Modal (Multiple M3U support) -->
+    <div id="netflix-playlists-modal" class="series-modal hidden">
+        <div class="series-modal-content" style="max-width: 600px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08); background: rgba(20,20,20,0.95); backdrop-filter: blur(20px);">
+            <button class="series-close-btn" id="btn-close-playlists" aria-label="Fechar Gerenciador">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+            </button>
+            <div class="series-body" style="padding: 28px;">
+                <h2 style="margin-bottom: 20px; font-weight: 700; color: var(--text-primary); font-size: 1.6rem;">Gerenciar Listas IPTV</h2>
+                
+                <!-- Form to Add Playlist -->
+                <div class="playlist-add-section" style="margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                    <h3 style="font-size: 1rem; margin-bottom: 14px; color: var(--text-secondary); font-weight: 600;">Adicionar Nova Lista</h3>
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <input type="text" id="playlist-new-name" placeholder="Nome da Lista (ex: Esportes, Filmes)" style="padding: 12px 16px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: #fff; font-size: 0.9rem; outline: none; transition: border-color 0.2s;">
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" id="playlist-new-url" placeholder="Cole a URL da lista M3U (http://...)" style="flex: 1; padding: 12px 16px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: #fff; font-size: 0.9rem; outline: none; transition: border-color 0.2s;">
+                            <button id="btn-playlist-add-url" style="padding: 0 20px; background: var(--primary-color); border: none; border-radius: 8px; color: #fff; cursor: pointer; font-weight: 600; font-size: 0.9rem; transition: background 0.2s;">Adicionar</button>
+                        </div>
+                        <div style="text-align: center; color: var(--text-secondary); font-size: 0.8rem; letter-spacing: 1px; font-weight: 600; margin: 4px 0;">OU</div>
+                        <div class="file-drop-area" id="playlist-file-drop" style="padding: 20px; border: 2px dashed rgba(255,255,255,0.15); border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; background: rgba(0,0,0,0.2); transition: all 0.2s;">
+                            <svg class="cloud-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 32px; height: 32px; color: var(--text-secondary); margin-bottom: 8px;">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+                            </svg>
+                            <span style="font-size: 0.85rem; color: var(--text-secondary);">Arraste ou clique para enviar arquivo .m3u</span>
+                            <input type="file" id="playlist-file-input" accept=".m3u,.m3u8" style="display: none;">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Active Playlists List -->
+                <div class="playlists-list-section">
+                    <h3 style="font-size: 1rem; margin-bottom: 14px; color: var(--text-secondary); font-weight: 600;">Minhas Listas</h3>
+                    <div id="playlists-list-container" style="display: flex; flex-direction: column; gap: 12px; max-height: 250px; overflow-y: auto; padding-right: 5px;">
+                        <!-- Dinamicamente populado -->
                     </div>
                 </div>
             </div>

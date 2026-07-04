@@ -16,6 +16,54 @@ import re
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'static', 'cache', 'iptv_catalog.db')
 
+def rewrite_m3u8(content, manifest_url):
+    import urllib.parse
+    import re
+    
+    parsed_manifest = urllib.parse.urlparse(manifest_url)
+    manifest_query = parsed_manifest.query
+    
+    # Base URL sem nome de arquivo para caminhos relativos
+    base_path_url = manifest_url
+    if '?' in base_path_url:
+        base_path_url = base_path_url.split('?')[0]
+    if not base_path_url.endswith('/'):
+        base_path_url = base_path_url.rsplit('/', 1)[0] + '/'
+        
+    rewritten_lines = []
+    for line in content.splitlines():
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+        if line_stripped.startswith('#'):
+            tag = line_stripped
+            uri_match = re.search(r'URI=["\'](.*?)["\']', tag)
+            if uri_match:
+                uri = uri_match.group(1)
+                if not uri.startswith('data:'):
+                    # Resolve o caminho absoluto
+                    abs_uri = urllib.parse.urljoin(base_path_url, uri)
+                    # Herda os query params do manifest se o segmento for do mesmo domínio e não tiver params
+                    if manifest_query:
+                        parsed_uri = urllib.parse.urlparse(abs_uri)
+                        if not parsed_uri.query and parsed_uri.netloc == parsed_manifest.netloc:
+                            abs_uri = urllib.parse.urlunparse(parsed_uri._replace(query=manifest_query))
+                            
+                    proxied_uri = f"/api/m3u/stream?url={urllib.parse.quote(abs_uri)}"
+                    tag = tag.replace(uri, proxied_uri)
+            rewritten_lines.append(tag)
+        else:
+            abs_url = urllib.parse.urljoin(base_path_url, line_stripped)
+            # Herda os query params do manifest se o segmento for do mesmo domínio e não tiver params
+            if manifest_query:
+                parsed_url = urllib.parse.urlparse(abs_url)
+                if not parsed_url.query and parsed_url.netloc == parsed_manifest.netloc:
+                    abs_url = urllib.parse.urlunparse(parsed_url._replace(query=manifest_query))
+                    
+            proxied_url = f"/api/m3u/stream?url={urllib.parse.quote(abs_url)}"
+            rewritten_lines.append(proxied_url)
+    return '\n'.join(rewritten_lines)
+
 def parse_m3u_content(m3u_text):
     import re
     logo_regex = re.compile(r'tvg-logo=["\'](.*?)["\']', re.IGNORECASE)
@@ -201,18 +249,30 @@ def init_db():
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
     cursor = conn.cursor()
     
-    # Migração automática do schema anterior do banco de dados
+    # Migração automática do schema anterior do banco de dados para suportar playlists
     try:
-        cursor.execute("SELECT tmdb_queried FROM channels LIMIT 1")
+        cursor.execute("SELECT playlist_id FROM channels LIMIT 1")
     except sqlite3.OperationalError:
-        # Coluna tmdb_queried não encontrada, reconstrói a tabela para aplicar o novo schema
+        # Coluna playlist_id não encontrada, reconstrói a tabela para aplicar o novo schema
         cursor.execute("DROP TABLE IF EXISTS channels")
-        print("[Banco de Dados] Tabela channels antiga removida para migração do TMDb.")
+        print("[Banco de Dados] Tabela channels antiga removida para migração do playlist_id.")
         
-    # Canais de IPTV analisados (com suporte a séries e TMDb)
+    # Tabela de Playlists
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS playlists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            url TEXT,
+            active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Canais de IPTV analisados (com suporte a séries, TMDb e relacionamento de playlists)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS channels (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            playlist_id INTEGER,
             name TEXT,
             logo TEXT,
             group_title TEXT,
@@ -226,9 +286,11 @@ def init_db():
             backdrop_path TEXT,
             overview TEXT,
             rating REAL,
-            tmdb_queried INTEGER DEFAULT 0
+            tmdb_queried INTEGER DEFAULT 0,
+            FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
         )
     ''')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_playlist ON channels(playlist_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_group ON channels(group_title)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_name ON channels(name)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_series ON channels(is_series, series_name)')
@@ -867,6 +929,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
         # Rotas do Cine Casa (IPTV)
         elif parsed_path.path == '/api/m3u/status':
             self.handle_m3u_status()
+        elif parsed_path.path == '/api/m3u/playlists':
+            self.handle_m3u_playlists()
         elif parsed_path.path == '/api/m3u/categories':
             self.handle_m3u_categories()
         elif parsed_path.path == '/api/m3u/category':
@@ -877,6 +941,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.handle_m3u_history_position()
         elif parsed_path.path == '/api/m3u/series/episodes':
             self.handle_m3u_series_episodes()
+        elif parsed_path.path == '/api/m3u/stream':
+            self.handle_m3u_stream()
         elif parsed_path.path.startswith('/api/'):
             self.send_error_response("Rota da API não encontrada", 404)
         else:
@@ -899,6 +965,10 @@ class BulbHandler(SimpleHTTPRequestHandler):
         # Rotas do Cine Casa (IPTV)
         elif parsed_path.path == '/api/m3u/import':
             self.handle_m3u_import()
+        elif parsed_path.path == '/api/m3u/playlists/toggle':
+            self.handle_m3u_playlist_toggle()
+        elif parsed_path.path == '/api/m3u/playlists/delete':
+            self.handle_m3u_playlist_delete()
         elif parsed_path.path == '/api/m3u/history/update':
             self.handle_m3u_history_update()
         elif parsed_path.path == '/api/m3u/clear':
@@ -1155,24 +1225,32 @@ class BulbHandler(SimpleHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length)
             
-            # Tenta decodificar como JSON para ver se é uma importação por URL
-            is_url = False
+            # Tenta decodificar como JSON
+            is_json = False
             m3u_url = ""
+            m3u_content = ""
+            playlist_name = ""
+            
             try:
                 data = json.loads(post_data.decode('utf-8'))
-                if isinstance(data, dict) and 'url' in data:
-                    m3u_url = data['url'].strip()
-                    is_url = True
+                if isinstance(data, dict):
+                    m3u_url = data.get('url', '').strip()
+                    m3u_content = data.get('content', '').strip()
+                    playlist_name = data.get('name', '').strip()
+                    is_json = True
             except Exception:
                 pass
 
             m3u_text = ""
-            if is_url:
-                print(f"[Cine Casa] Baixando lista M3U da URL: {m3u_url}")
-                import urllib.request
-                req = urllib.request.Request(m3u_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    m3u_text = response.read().decode('utf-8', errors='replace')
+            if is_json:
+                if m3u_url:
+                    print(f"[Cine Casa] Baixando lista M3U da URL: {m3u_url}")
+                    import urllib.request
+                    req = urllib.request.Request(m3u_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=15) as response:
+                        m3u_text = response.read().decode('utf-8', errors='replace')
+                else:
+                    m3u_text = m3u_content
             else:
                 m3u_text = post_data.decode('utf-8', errors='replace')
 
@@ -1181,12 +1259,29 @@ class BulbHandler(SimpleHTTPRequestHandler):
             if not parsed_channels:
                 raise Exception("Nenhum canal válido encontrado na lista M3U. Verifique a sintaxe.")
 
+            # Se o nome da playlist estiver vazio, define um padrão
+            if not playlist_name:
+                if m3u_url:
+                    playlist_name = m3u_url.split('/')[-1] or "Lista Remota"
+                else:
+                    playlist_name = f"Lista IPTV {int(time.time())}"
+
+            # Conecta e cria a playlist no banco
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "INSERT INTO playlists (name, url, active) VALUES (?, ?, 1)",
+                (playlist_name, m3u_url if m3u_url else None)
+            )
+            playlist_id = cursor.lastrowid
+
             # Analisa e mapeia os canais identificando quais são episódios de séries
             channels_to_insert = []
             for name, logo, group, url in parsed_channels:
                 is_series, series_name, season, episode, ep_name = parse_series_info(name)
                 channels_to_insert.append((
-                    name, logo, group, url,
+                    playlist_id, name, logo, group, url,
                     1 if is_series else 0,
                     series_name if is_series else None,
                     season, episode,
@@ -1194,17 +1289,14 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 ))
 
             # Insere no SQLite em lote de forma extremamente rápida
-            conn = sqlite3.connect(DB_PATH, timeout=30.0)
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM channels")
             cursor.executemany(
-                "INSERT INTO channels (name, logo, group_title, url, is_series, series_name, season, episode, episode_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO channels (playlist_id, name, logo, group_title, url, is_series, series_name, season, episode, episode_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 channels_to_insert
             )
             conn.commit()
             conn.close()
 
-            print(f"[Cine Casa] Importação concluída. Total de canais: {len(parsed_channels)}")
+            print(f"[Cine Casa] Importação concluída. Playlist ID: {playlist_id}. Total de canais: {len(parsed_channels)}")
             self.send_json_response({"success": True, "count": len(parsed_channels)})
         except Exception as e:
             self.send_error_response(str(e))
@@ -1214,17 +1306,22 @@ class BulbHandler(SimpleHTTPRequestHandler):
             conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             
-            cursor.execute("SELECT COUNT(*) FROM channels")
+            # Conta o total de canais de playlists ativas
+            cursor.execute("SELECT COUNT(*) FROM channels WHERE playlist_id IN (SELECT id FROM playlists WHERE active = 1)")
             total = cursor.fetchone()[0]
             
             loaded = total > 0
             categories = []
             
             if loaded:
-                # Retorna as 8 principais categorias (com mais canais)
-                cursor.execute(
-                    "SELECT group_title, COUNT(*) FROM channels GROUP BY group_title ORDER BY COUNT(*) DESC LIMIT 8"
-                )
+                # Retorna as 8 principais categorias (com mais canais) de playlists ativas
+                cursor.execute('''
+                    SELECT group_title, COUNT(*) 
+                    FROM channels 
+                    WHERE playlist_id IN (SELECT id FROM playlists WHERE active = 1) 
+                    GROUP BY group_title 
+                    ORDER BY COUNT(*) DESC LIMIT 8
+                ''')
                 rows = cursor.fetchall()
                 categories = [{"name": r[0], "count": r[1]} for r in rows]
                 
@@ -1238,12 +1335,70 @@ class BulbHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error_response(str(e))
 
+    def handle_m3u_playlists(self):
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, url, active, created_at FROM playlists ORDER BY created_at DESC")
+            rows = cursor.fetchall()
+            
+            playlists = []
+            for r in rows:
+                cursor.execute("SELECT COUNT(*) FROM channels WHERE playlist_id = ?", (r[0],))
+                count = cursor.fetchone()[0]
+                playlists.append({
+                    "id": r[0],
+                    "name": r[1],
+                    "url": r[2] or "Upload de Arquivo",
+                    "active": r[3],
+                    "created_at": r[4],
+                    "channel_count": count
+                })
+            conn.close()
+            self.send_json_response({"success": True, "playlists": playlists})
+        except Exception as e:
+            self.send_error_response(str(e))
+
+    def handle_m3u_playlist_toggle(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            data = json.loads(post_data.decode('utf-8'))
+            playlist_id = int(data.get('id'))
+            active = int(data.get('active'))
+            
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE playlists SET active = ? WHERE id = ?", (active, playlist_id))
+            conn.commit()
+            conn.close()
+            self.send_json_response({"success": True})
+        except Exception as e:
+            self.send_error_response(str(e))
+
+    def handle_m3u_playlist_delete(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            data = json.loads(post_data.decode('utf-8'))
+            playlist_id = int(data.get('id'))
+            
+            conn = sqlite3.connect(DB_PATH, timeout=30.0)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM channels WHERE playlist_id = ?", (playlist_id,))
+            cursor.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
+            conn.commit()
+            conn.close()
+            self.send_json_response({"success": True})
+        except Exception as e:
+            self.send_error_response(str(e))
+
     def handle_m3u_categories(self):
         try:
             conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT group_title, COUNT(*) FROM channels GROUP BY group_title ORDER BY group_title ASC"
+                "SELECT group_title, COUNT(*) FROM channels WHERE playlist_id IN (SELECT id FROM playlists WHERE active = 1) GROUP BY group_title ORDER BY group_title ASC"
             )
             rows = cursor.fetchall()
             conn.close()
@@ -1270,7 +1425,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
             cursor = conn.cursor()
             
             # Filtros aplicados sobre a seleção combinada (não-séries + séries agrupadas)
-            where_clauses = []
+            where_clauses = ["playlist_id IN (SELECT id FROM playlists WHERE active = 1)"]
             params = []
             
             if category:
@@ -1284,17 +1439,17 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 
             where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
             
-            # Consulta combinada
+            # Consulta combinada filtrando por playlist ativa
             subquery = '''
-                SELECT id, name, logo, group_title, url, 0 AS is_series, NULL AS series_name, poster_path, backdrop_path, overview, rating, tmdb_queried
+                SELECT id, name, logo, group_title, url, 0 AS is_series, NULL AS series_name, poster_path, backdrop_path, overview, rating, tmdb_queried, playlist_id
                 FROM channels 
-                WHERE is_series = 0
+                WHERE is_series = 0 AND playlist_id IN (SELECT id FROM playlists WHERE active = 1)
                 
                 UNION ALL
                 
-                SELECT MIN(id) as id, series_name as name, logo, group_title, '' as url, 1 as is_series, series_name, poster_path, backdrop_path, overview, rating, tmdb_queried
+                SELECT MIN(id) as id, series_name as name, logo, group_title, '' as url, 1 as is_series, series_name, poster_path, backdrop_path, overview, rating, tmdb_queried, playlist_id
                 FROM channels 
-                WHERE is_series = 1 
+                WHERE is_series = 1 AND playlist_id IN (SELECT id FROM playlists WHERE active = 1)
                 GROUP BY series_name
             '''
             
@@ -1431,6 +1586,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
             conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             cursor.execute("DELETE FROM channels")
+            cursor.execute("DELETE FROM playlists")
             cursor.execute("DELETE FROM history")
             conn.commit()
             conn.close()
@@ -1453,7 +1609,7 @@ class BulbHandler(SimpleHTTPRequestHandler):
             cursor.execute('''
                 SELECT id, name, url, logo, season, episode, episode_name 
                 FROM channels 
-                WHERE is_series = 1 AND series_name = ?
+                WHERE is_series = 1 AND series_name = ? AND playlist_id IN (SELECT id FROM playlists WHERE active = 1)
                 ORDER BY season ASC, episode ASC
             ''', (series_name,))
             rows = cursor.fetchall()
@@ -1474,6 +1630,132 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.send_json_response({"success": True, "episodes": episodes})
         except Exception as e:
             self.send_error_response(str(e))
+
+    def handle_m3u_stream(self):
+        import urllib.request
+        import urllib.error
+        import socket
+        import ssl
+        
+        parsed = urlparse(self.path)
+        queries = parse_qs(parsed.query)
+        stream_url = queries.get('url', [''])[0].strip()
+        
+        if not stream_url:
+            self.send_error_response("URL de stream inválida.", 400)
+            return
+
+        print(f"[Stream Proxy] Conectando ao stream: {stream_url}")
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0'
+        }
+        # Repassa cabeçalhos importantes de compatibilidade
+        for h in ['Range', 'Authorization', 'Cookie', 'X-Playback-Session-Id']:
+            if h in self.headers:
+                headers[h] = self.headers[h]
+                if h == 'Range':
+                    print(f"[Stream Proxy] Repassando cabeçalho Range: {self.headers['Range']}")
+            
+        req = urllib.request.Request(stream_url, headers=headers)
+        
+        response = None
+        try:
+            # Cria contexto de SSL sem verificação (essencial para compatibilidade com certificados autoassinados/inválidos comuns em listas IPTV)
+            ssl_context = ssl._create_unverified_context()
+            
+            # Abre a URL remota com timeout de 5.0 segundos e contexto SSL tolerante
+            response = urllib.request.urlopen(req, timeout=5.0, context=ssl_context)
+            
+            status_code = response.getcode()
+            content_type = response.headers.get('Content-Type', 'video/mp2t').lower()
+            content_length = response.headers.get('Content-Length')
+            content_range = response.headers.get('Content-Range')
+            
+            # Validação de integridade do link: Rejeita se o sinal IPTV retornar página HTML de erro/bloqueio
+            if 'text/html' in content_type:
+                print(f"[Stream Proxy] Conexão abortada: URL retornou conteúdo HTML (erro/bloqueio do provedor).")
+                self.send_error_response("Canal offline ou com link de transmissão expirado (HTML).", 502)
+                return
+                
+            # Se for manifest (.m3u8), reescrevemos o conteúdo no servidor
+            is_m3u8 = '.m3u8' in stream_url.lower() or 'mpegurl' in content_type
+            
+            if is_m3u8:
+                m3u8_content = response.read().decode('utf-8', errors='replace')
+                # Fecha a conexão de origem do manifest imediatamente
+                response.close()
+                response = None
+                
+                rewritten_content = rewrite_m3u8(m3u8_content, stream_url)
+                rewritten_bytes = rewritten_content.encode('utf-8')
+                
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/x-mpegURL')
+                self.send_header('Content-Length', str(len(rewritten_bytes)))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Cache-Control', 'no-cache')
+                self.end_headers()
+                self.wfile.write(rewritten_bytes)
+                return
+
+            # Para streams binários (ex: .ts ou chunks de vídeo)
+            self.send_response(status_code)
+            self.send_header('Content-Type', content_type)
+            if content_length:
+                self.send_header('Content-Length', content_length)
+            if content_range:
+                self.send_header('Content-Range', content_range)
+                
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Accept-Ranges', 'bytes')
+            self.end_headers()
+            
+            # Pipe/transmissão incremental com buffer dinâmico
+            loop_count = 0
+            while True:
+                chunk_size = 8192 if loop_count < 50 else 65536
+                chunk = response.read(chunk_size)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush() 
+                loop_count += 1
+                
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError) as ce:
+            print(f"[Stream Proxy] Cliente desconectou durante a transmissão: {ce}")
+        except urllib.error.HTTPError as he:
+            print(f"[Stream Proxy] Erro HTTP da fonte ({he.code}): {he.reason}")
+            try:
+                self.send_error_response(f"Erro HTTP {he.code} ao conectar ao stream", he.code)
+            except Exception:
+                pass
+        except urllib.error.URLError as ue:
+            print(f"[Stream Proxy] Erro de rede na URL do stream: {ue.reason}")
+            try:
+                self.send_error_response("Erro ao conectar no servidor de transmissão", 502)
+            except Exception:
+                pass
+        except socket.timeout:
+            print("[Stream Proxy] Conexão com o stream expirou (Timeout).")
+            try:
+                self.send_error_response("Tempo limite de conexão esgotado com o canal", 504)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[Stream Proxy] Falha interna de streaming: {e}")
+            try:
+                self.send_error_response(f"Falha na transmissão do canal: {str(e)}", 500)
+            except Exception:
+                pass
+        finally:
+            if response:
+                try:
+                    response.close()
+                    print("[Stream Proxy] Conexão com o servidor IPTV fechada com sucesso.")
+                except Exception as e:
+                    print(f"[Stream Proxy] Erro ao fechar conexão com IPTV: {e}")
 
     # Utilitários de Resposta
     def send_json_response(self, data, code=200):

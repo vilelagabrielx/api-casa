@@ -438,11 +438,13 @@ setupEventListeners = function() {
             const mainContainer = document.querySelector('.container');
             if (targetNav === 'lights') {
                 if (mainContainer) mainContainer.classList.remove('netflix-mode');
+                document.body.classList.remove('netflix-active');
                 sectionLights.style.display = 'block';
                 sectionMusic.style.display = 'none';
                 sectionNetflix.style.display = 'none';
             } else if (targetNav === 'music') {
                 if (mainContainer) mainContainer.classList.remove('netflix-mode');
+                document.body.classList.remove('netflix-active');
                 sectionLights.style.display = 'none';
                 sectionMusic.style.display = 'block';
                 sectionNetflix.style.display = 'none';
@@ -451,6 +453,7 @@ setupEventListeners = function() {
                 fetchMusicQueue();
             } else if (targetNav === 'netflix') {
                 if (mainContainer) mainContainer.classList.add('netflix-mode');
+                document.body.classList.add('netflix-active');
                 sectionLights.style.display = 'none';
                 sectionMusic.style.display = 'none';
                 sectionNetflix.style.display = 'block';
@@ -949,7 +952,20 @@ let netflixState = {
     currentVideoInfo: null,
     hlsInstance: null,
     mpegtsInstance: null,
-    historySaveInterval: null
+    historySaveInterval: null,
+    playbackWatchdog: null,
+    bufferingWatchdog: null,
+    videoJsPlayer: null,
+    
+    // Novas propriedades do Makeover
+    bannerRotationInterval: null,
+    heroActiveChannel: null,
+    heroTrailerTimeout: null,
+    heroTrailerVideo: null,
+    activeHoverTimeout: null,
+    activeHoverVideo: null,
+    activeHoverCard: null,
+    favorites: JSON.parse(localStorage.getItem('cine_favorites') || '[]')
 };
 
 // Bind de Elementos
@@ -972,6 +988,26 @@ const netflixPlayerModal = document.getElementById('netflix-player-modal');
 const btnClosePlayer = document.getElementById('btn-close-player');
 const netflixVideo = document.getElementById('netflix-video');
 
+// Bind de Elementos Netflix Premium Makeover
+const profileAvatarBtn = document.getElementById('profile-avatar-btn');
+const profileDropdown = document.getElementById('profile-dropdown');
+const netflixHeroTrailer = document.getElementById('netflix-hero-trailer-container');
+const btnHeroInfo = document.getElementById('btn-hero-info');
+const navLinkHome = document.getElementById('nav-link-home');
+const navLinkSeries = document.getElementById('nav-link-series');
+const navLinkMovies = document.getElementById('nav-link-movies');
+const navLinkFavorites = document.getElementById('nav-link-favorites');
+
+// Elementos do Modal de Playlists
+const netflixPlaylistsModal = document.getElementById('netflix-playlists-modal');
+const btnClosePlaylists = document.getElementById('btn-close-playlists');
+const playlistNewName = document.getElementById('playlist-new-name');
+const playlistNewUrl = document.getElementById('playlist-new-url');
+const btnPlaylistAddUrl = document.getElementById('btn-playlist-add-url');
+const playlistFileDrop = document.getElementById('playlist-file-drop');
+const playlistFileInput = document.getElementById('playlist-file-input');
+const playlistsListContainer = document.getElementById('playlists-list-container');
+
 // Elementos do Modal de Séries
 const netflixSeriesModal = document.getElementById('netflix-series-modal');
 const btnCloseSeries = document.getElementById('btn-close-series');
@@ -989,7 +1025,7 @@ function setupNetflixEvents() {
     if (btnImportM3uUrl) {
         btnImportM3uUrl.addEventListener('click', () => {
             const url = m3uUrlInput.value.trim();
-            if (!url) return alert("Por favor, cole um link válido.");
+            if (!url) return showToast("Por favor, cole um link válido.", "warning");
             btnImportM3uUrl.disabled = true;
             btnImportM3uUrl.textContent = "Baixando...";
             
@@ -1004,16 +1040,16 @@ function setupNetflixEvents() {
                 btnImportM3uUrl.textContent = "Importar Link";
                 if (data.success) {
                     m3uUrlInput.value = "";
-                    alert(`Lista importada com sucesso! ${data.count} canais catalogados.`);
+                    showToast(`Lista importada com sucesso! ${data.count} canais catalogados.`, "success");
                     checkM3UStatus();
                 } else {
-                    alert(`Erro: ${data.error}`);
+                    showToast(`Erro: ${data.error}`, "error");
                 }
             })
             .catch(err => {
                 btnImportM3uUrl.disabled = false;
                 btnImportM3uUrl.textContent = "Importar Link";
-                alert("Erro de conexão ao importar lista.");
+                showToast("Erro de conexão ao importar lista.", "error");
             });
         });
     }
@@ -1048,12 +1084,15 @@ function setupNetflixEvents() {
         });
     }
 
-    // Botão Trocar Lista
+    // Botão Gerenciar Listas IPTV
     if (btnChangePlaylist) {
-        btnChangePlaylist.addEventListener('click', () => {
-            if (confirm("Tem certeza que deseja apagar o catálogo e enviar outra lista M3U?")) {
-                fetch('/api/m3u/clear', { method: 'POST' })
-                .then(() => checkM3UStatus());
+        btnChangePlaylist.addEventListener('click', (e) => {
+            e.preventDefault();
+            SoundFX.playClick();
+            if (netflixPlaylistsModal) {
+                netflixPlaylistsModal.classList.remove('hidden');
+                document.body.classList.add('modal-open');
+                fetchPlaylists();
             }
         });
     }
@@ -1099,9 +1138,132 @@ function setupNetflixEvents() {
                 closePlayer();
             } else if (netflixSeriesModal && !netflixSeriesModal.classList.contains('hidden')) {
                 closeSeriesDetails();
+            } else if (netflixPlaylistsModal && !netflixPlaylistsModal.classList.contains('hidden')) {
+                netflixPlaylistsModal.classList.add('hidden');
+                document.body.classList.remove('modal-open');
+                checkM3UStatus();
             }
         }
     });
+
+    // Eventos do Modal de Playlists
+    if (btnClosePlaylists) {
+        btnClosePlaylists.addEventListener('click', () => {
+            SoundFX.playClick();
+            if (netflixPlaylistsModal) {
+                netflixPlaylistsModal.classList.add('hidden');
+                document.body.classList.remove('modal-open');
+                checkM3UStatus();
+            }
+        });
+    }
+
+    if (btnPlaylistAddUrl) {
+        btnPlaylistAddUrl.addEventListener('click', () => {
+            const url = playlistNewUrl.value.trim();
+            const name = playlistNewName.value.trim();
+            if (!url) return showToast("Por favor, cole um link válido.", "warning");
+            
+            btnPlaylistAddUrl.disabled = true;
+            btnPlaylistAddUrl.textContent = "Baixando...";
+            SoundFX.playClick();
+            
+            fetch('/api/m3u/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url, name: name })
+            })
+            .then(r => r.json())
+            .then(data => {
+                btnPlaylistAddUrl.disabled = false;
+                btnPlaylistAddUrl.textContent = "Adicionar";
+                if (data.success) {
+                    playlistNewUrl.value = "";
+                    playlistNewName.value = "";
+                    showToast(`Lista importada com sucesso! ${data.count} canais catalogados.`, "success");
+                    SoundFX.playChime();
+                    fetchPlaylists();
+                    checkM3UStatus();
+                } else {
+                    showToast(`Erro: ${data.error}`, "error");
+                }
+            })
+            .catch(() => {
+                btnPlaylistAddUrl.disabled = false;
+                btnPlaylistAddUrl.textContent = "Adicionar";
+                showToast("Erro de conexão ao importar lista.", "error");
+            });
+        });
+    }
+
+    if (playlistFileDrop) {
+        playlistFileDrop.addEventListener('click', () => playlistFileInput.click());
+        
+        playlistFileDrop.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            playlistFileDrop.style.borderColor = 'var(--primary-color)';
+        });
+        
+        playlistFileDrop.addEventListener('dragleave', () => {
+            playlistFileDrop.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+        });
+        
+        playlistFileDrop.addEventListener('drop', (e) => {
+            e.preventDefault();
+            playlistFileDrop.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+            if (e.dataTransfer.files.length > 0) {
+                uploadPlaylistFile(e.dataTransfer.files[0]);
+            }
+        });
+    }
+
+    if (playlistFileInput) {
+        playlistFileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                uploadPlaylistFile(e.target.files[0]);
+            }
+        });
+    }
+
+    // Inicializa o Video.js se disponível
+    if (typeof videojs !== 'undefined' && !netflixState.videoJsPlayer) {
+        netflixState.videoJsPlayer = videojs('netflix-video', {
+            controls: true,
+            autoplay: false,
+            preload: 'auto',
+            fill: true
+        });
+    }
+
+    // Setup do Menu Dropdown de Perfil
+    setupProfileDropdown();
+    
+    // Setup dos Filtros da Navbar
+    setupNavbarFilters();
+    
+    // Inicia rotação automática do Hero Banner
+    startBannerRotation();
+    
+    // Configura efeito de escurecimento com scroll da janela
+    window.addEventListener('scroll', () => {
+        const navbar = document.querySelector('.netflix-navbar');
+        if (navbar) {
+            if (window.scrollY > 50) {
+                navbar.classList.add('scrolled');
+            } else {
+                navbar.classList.remove('scrolled');
+            }
+        }
+    });
+
+    // Notificações feedback
+    const btnNotifications = document.getElementById('btn-notifications');
+    if (btnNotifications) {
+        btnNotifications.addEventListener('click', () => {
+            SoundFX.playClick();
+            showToast("Novas recomendações de canais de esportes adicionadas!", "info");
+        });
+    }
 
     // Se já estiver na aba netflix ao carregar, verifica status
     checkM3UStatus();
@@ -1126,16 +1288,16 @@ function uploadM3UFile(file) {
             dropText.textContent = originalText;
             m3uFileDrop.style.pointerEvents = 'auto';
             if (data.success) {
-                alert(`Arquivo importado! ${data.count} canais analisados com sucesso.`);
+                showToast(`Arquivo importado! ${data.count} canais analisados com sucesso.`, "success");
                 checkM3UStatus();
             } else {
-                alert(`Erro ao importar: ${data.error}`);
+                showToast(`Erro ao importar: ${data.error}`, "error");
             }
         })
         .catch(() => {
             dropText.textContent = originalText;
             m3uFileDrop.style.pointerEvents = 'auto';
-            alert("Erro de conexão ao enviar arquivo.");
+            showToast("Erro de conexão ao enviar arquivo.", "error");
         });
     };
     reader.readAsText(file);
@@ -1198,53 +1360,429 @@ function renderCategoryTags() {
     });
 }
 
-function renderShelves() {
+// Sistema de Sons Sintetizados via Web Audio API (Netflix Style)
+const SoundFX = {
+    audioCtx: null,
+    init() {
+        if (!this.audioCtx) {
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (this.audioCtx.state === 'suspended') {
+            this.audioCtx.resume();
+        }
+    },
+    // Som clássico "Tudum" da Netflix
+    playTudum() {
+        try {
+            this.init();
+            const ctx = this.audioCtx;
+            const now = ctx.currentTime;
+            
+            // Primeiro tom grave
+            const osc1 = ctx.createOscillator();
+            const gain1 = ctx.createGain();
+            osc1.type = 'sawtooth';
+            osc1.frequency.setValueAtTime(80, now);
+            osc1.frequency.linearRampToValueAtTime(65, now + 0.6);
+            gain1.gain.setValueAtTime(0.2, now);
+            gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
+            osc1.connect(gain1);
+            gain1.connect(ctx.destination);
+            
+            // Segundo tom harmônico
+            const osc2 = ctx.createOscillator();
+            const gain2 = ctx.createGain();
+            osc2.type = 'triangle';
+            osc2.frequency.setValueAtTime(160, now + 0.05);
+            osc2.frequency.linearRampToValueAtTime(130, now + 0.6);
+            gain2.gain.setValueAtTime(0.25, now + 0.05);
+            gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
+            osc2.connect(gain2);
+            gain2.connect(ctx.destination);
+            
+            osc1.start(now);
+            osc2.start(now + 0.05);
+            osc1.stop(now + 0.8);
+            osc2.stop(now + 0.8);
+        } catch (e) {
+            console.error("Erro no som Tudum:", e);
+        }
+    },
+    // Som sutil de clique
+    playClick() {
+        try {
+            this.init();
+            const ctx = this.audioCtx;
+            const now = ctx.currentTime;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(1200, now);
+            osc.frequency.exponentialRampToValueAtTime(150, now + 0.04);
+            
+            gain.gain.setValueAtTime(0.04, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+            
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            
+            osc.start(now);
+            osc.stop(now + 0.05);
+        } catch (e) {}
+    },
+    // Som de chime de sucesso
+    playChime() {
+        try {
+            this.init();
+            const ctx = this.audioCtx;
+            const now = ctx.currentTime;
+            
+            const freqs = [523.25, 659.25, 783.99]; // C5, E5, G5
+            freqs.forEach((freq, idx) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+                
+                gain.gain.setValueAtTime(0.06, now + idx * 0.08);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.3);
+                
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                
+                osc.start(now + idx * 0.08);
+                osc.stop(now + idx * 0.08 + 0.3);
+            });
+        } catch (e) {}
+    }
+};
+
+function toggleFavorite(channel, btn) {
+    const idx = netflixState.favorites.findIndex(fav => fav.url === channel.url);
+    if (idx !== -1) {
+        netflixState.favorites.splice(idx, 1);
+        btn.textContent = '+';
+        btn.title = 'Adicionar à minha lista';
+        showToast(`"${channel.name}" removido de Minha Lista.`, "info");
+    } else {
+        netflixState.favorites.push(channel);
+        btn.textContent = '✓';
+        btn.title = 'Remover da minha lista';
+        showToast(`"${channel.name}" adicionado a Minha Lista.`, "success");
+    }
+    localStorage.setItem('cine_favorites', JSON.stringify(netflixState.favorites));
+    
+    const activeNav = document.querySelector('.nav-link.active');
+    if (activeNav && activeNav.id === 'nav-link-favorites') {
+        renderFavoritesShelf();
+    }
+}
+
+function setupProfileDropdown() {
+    if (!profileAvatarBtn || !profileDropdown) return;
+    
+    profileAvatarBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        SoundFX.playClick();
+        profileDropdown.classList.toggle('hidden');
+    });
+    
+    document.addEventListener('click', () => {
+        if (profileDropdown && !profileDropdown.classList.contains('hidden')) {
+            profileDropdown.classList.add('hidden');
+        }
+    });
+    
+    const btnProfileMylist = document.getElementById('btn-profile-mylist');
+    if (btnProfileMylist) {
+        btnProfileMylist.addEventListener('click', (e) => {
+            e.preventDefault();
+            SoundFX.playClick();
+            renderFavoritesShelf();
+        });
+    }
+    
+    const btnProfileMe = document.getElementById('btn-profile-me');
+    if (btnProfileMe) {
+        btnProfileMe.addEventListener('click', (e) => {
+            e.preventDefault();
+            SoundFX.playClick();
+            showToast("Perfil ativo: Administrador", "info");
+        });
+    }
+    
+    const btnProfileSettings = document.getElementById('btn-profile-settings');
+    if (btnProfileSettings) {
+        btnProfileSettings.addEventListener('click', (e) => {
+            e.preventDefault();
+            SoundFX.playClick();
+            showToast("Configurações do Cine Casa carregadas.", "info");
+        });
+    }
+    
+    const btnProfileLogout = document.getElementById('btn-profile-logout');
+    if (btnProfileLogout) {
+        btnProfileLogout.addEventListener('click', (e) => {
+            e.preventDefault();
+            SoundFX.playClick();
+            fetch('/api/m3u/clear', { method: 'POST' }).then(() => {
+                window.location.reload();
+            });
+        });
+    }
+}
+
+function setupNavbarFilters() {
+    const navLinks = [navLinkHome, navLinkSeries, navLinkMovies, navLinkFavorites];
+    navLinks.forEach(link => {
+        if (!link) return;
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            SoundFX.playClick();
+            navLinks.forEach(l => { if (l) l.classList.remove('active'); });
+            link.classList.add('active');
+            
+            const id = link.id;
+            if (id === 'nav-link-home') {
+                renderShelves();
+            } else if (id === 'nav-link-series') {
+                renderFilteredCatalog("series");
+            } else if (id === 'nav-link-movies') {
+                renderFilteredCatalog("movies");
+            } else if (id === 'nav-link-favorites') {
+                renderFavoritesShelf();
+            }
+        });
+    });
+}
+
+function renderFavoritesShelf() {
     if (!netflixShelves) return;
     netflixShelves.innerHTML = "";
     
-    // 1. Renderiza a fileira "Continuar Assistindo" se tiver itens
-    fetch('/api/m3u/history')
-    .then(r => r.json())
-    .then(data => {
-        if (data.success && data.history.length > 0) {
-            const shelf = createShelfDOM("Continuar Assistindo");
-            const row = shelf.querySelector('.shelf-row');
-            
-            data.history.forEach(item => {
-                const card = createVideoCard(item, { position: item.position, duration: item.duration });
-                row.appendChild(card);
-            });
-            netflixShelves.prepend(shelf);
-        }
+    const shelf = createShelfDOM("Minha Lista");
+    netflixShelves.appendChild(shelf);
+    const row = shelf.querySelector('.shelf-row');
+    row.style.flexWrap = "wrap";
+    row.style.overflowX = "visible";
+    
+    if (netflixState.favorites.length === 0) {
+        row.innerHTML = `<p style="padding: 20px; color: var(--text-secondary);">Sua lista está vazia. Adicione itens clicando em "+" nos cards.</p>`;
+        return;
+    }
+    
+    netflixState.favorites.forEach(ch => {
+        row.appendChild(createVideoCard(ch));
     });
+}
 
-    // 2. Renderiza as fileiras padrões das maiores categorias
-    netflixState.topCategories.slice(0, 5).forEach(cat => {
-        const shelf = createShelfDOM(cat.name);
-        netflixShelves.appendChild(shelf);
-        const row = shelf.querySelector('.shelf-row');
-        
-        fetch(`/api/m3u/category?category=${encodeURIComponent(cat.name)}&limit=25`)
+function renderFilteredCatalog(type) {
+    if (!netflixShelves) return;
+    netflixShelves.innerHTML = "";
+    
+    const title = type === "series" ? "Séries Disponíveis" : "Filmes Disponíveis";
+    const shelf = createShelfDOM(title);
+    netflixShelves.appendChild(shelf);
+    const row = shelf.querySelector('.shelf-row');
+    row.style.flexWrap = "wrap";
+    row.style.overflowX = "visible";
+    
+    renderSkeletons();
+    
+    let fetchedChannels = [];
+    const loadPromises = netflixState.topCategories.slice(0, 4).map(cat => 
+        fetch(`/api/m3u/category?category=${encodeURIComponent(cat.name)}&limit=50`)
         .then(r => r.json())
         .then(data => {
             if (data.success) {
-                data.channels.forEach(ch => {
-                    row.appendChild(createVideoCard(ch));
+                fetchedChannels.push(...data.channels);
+            }
+        }).catch(() => {})
+    );
+    
+    Promise.all(loadPromises).then(() => {
+        netflixShelves.innerHTML = "";
+        netflixShelves.appendChild(shelf);
+        
+        let filtered = [];
+        if (type === "series") {
+            filtered = fetchedChannels.filter(ch => ch.is_series === 1);
+        } else {
+            filtered = fetchedChannels.filter(ch => ch.is_series !== 1);
+        }
+        
+        const seen = new Set();
+        filtered = filtered.filter(ch => {
+            const duplicate = seen.has(ch.url);
+            seen.add(ch.url);
+            return !duplicate;
+        });
+        
+        if (filtered.length === 0) {
+            row.innerHTML = `<p style="padding: 20px; color: var(--text-secondary);">Nenhum conteúdo desse tipo encontrado na lista IPTV atual.</p>`;
+            return;
+        }
+        
+        filtered.slice(0, 40).forEach(ch => {
+            row.appendChild(createVideoCard(ch));
+        });
+    });
+}
+
+function renderSkeletons() {
+    if (!netflixShelves) return;
+    netflixShelves.innerHTML = "";
+    
+    for (let i = 0; i < 3; i++) {
+        const shelf = document.createElement('div');
+        shelf.className = "shelf-container";
+        
+        let title = "Recomendados";
+        if (i === 0) title = "Continuar Assistindo";
+        else if (i === 1) title = "Em Alta";
+        
+        shelf.innerHTML = `
+            <h3 class="shelf-title" style="width: 150px; height: 18px; background: #222; border-radius: 4px;"></h3>
+            <div class="skeleton-row">
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+                <div class="skeleton-card"></div>
+            </div>
+        `;
+        netflixShelves.appendChild(shelf);
+    }
+}
+
+function startBannerRotation() {
+    if (netflixState.bannerRotationInterval) clearInterval(netflixState.bannerRotationInterval);
+    netflixState.bannerRotationInterval = setInterval(() => {
+        if (netflixPlayerModal && netflixPlayerModal.classList.contains('hidden') && !netflixHero.matches(':hover')) {
+            loadHeroBanner();
+        }
+    }, 20000);
+}
+
+function renderShelves() {
+    if (!netflixShelves) return;
+    renderSkeletons();
+    
+    const promises = [
+        fetch('/api/m3u/history').then(r => r.json()).catch(() => ({ success: false })),
+        fetch('/api/m3u/status').then(r => r.json()).catch(() => ({ success: false }))
+    ];
+    
+    Promise.all(promises).then(([historyData, statusData]) => {
+        netflixShelves.innerHTML = "";
+        
+        // 1. Continuar Assistindo (Histórico)
+        if (historyData.success && historyData.history && historyData.history.length > 0) {
+            const shelf = createShelfDOM("Continuar Assistindo");
+            const row = shelf.querySelector('.shelf-row');
+            historyData.history.forEach(item => {
+                row.appendChild(createVideoCard(item, { position: item.position, duration: item.duration }));
+            });
+            netflixShelves.appendChild(shelf);
+            
+            // 2. Recomendação Baseada em Histórico (IA fake)
+            const lastWatched = historyData.history[0];
+            if (lastWatched) {
+                const groupName = lastWatched.group;
+                let cleanGroupName = groupName;
+                if (!cleanGroupName || cleanGroupName.toLowerCase() === 'undefined' || cleanGroupName.toLowerCase() === 'null') {
+                    cleanGroupName = "Recomendados para Você";
+                }
+                const shelfWatched = createShelfDOM(`Porque você assistiu ${lastWatched.name}`);
+                netflixShelves.appendChild(shelfWatched);
+                const rowWatched = shelfWatched.querySelector('.shelf-row');
+                
+                fetch(`/api/m3u/category?category=${encodeURIComponent(groupName)}&limit=15`)
+                .then(r => r.json())
+                .then(d => {
+                    if (d.success) {
+                        d.channels.filter(ch => ch.url !== lastWatched.url).forEach(ch => {
+                            rowWatched.appendChild(createVideoCard(ch));
+                        });
+                    }
                 });
             }
-        });
+        }
+        
+        // 3. Recomendados e categorias principais
+        const topCats = netflixState.topCategories.slice(0, 5);
+        if (topCats.length > 0) {
+            topCats.forEach((cat, index) => {
+                let shelfTitle = cat.name;
+                if (!shelfTitle || shelfTitle.toLowerCase() === 'undefined' || shelfTitle.toLowerCase() === 'null') {
+                    shelfTitle = "Recomendados para Você";
+                }
+                
+                if (index === 0) shelfTitle = "Em Alta";
+                else if (index === 1) shelfTitle = "Novidades Quentes";
+                else if (index === 2) shelfTitle = "Destaques Cine Casa";
+                
+                const shelf = createShelfDOM(shelfTitle);
+                netflixShelves.appendChild(shelf);
+                const row = shelf.querySelector('.shelf-row');
+                
+                fetch(`/api/m3u/category?category=${encodeURIComponent(cat.name)}&limit=15`)
+                .then(r => r.json())
+                .then(d => {
+                    if (d.success) {
+                        d.channels.forEach(ch => {
+                            row.appendChild(createVideoCard(ch));
+                        });
+                    }
+                });
+            });
+        }
     });
 }
 
 function createShelfDOM(title) {
     const shelf = document.createElement('div');
     shelf.className = "shelf-container";
+    const shelfId = 'shelf-' + Math.random().toString(36).substr(2, 9);
+    
     shelf.innerHTML = `
         <h3 class="shelf-title">${title}</h3>
         <div class="shelf-row-wrapper">
-            <div class="shelf-row"></div>
+            <button class="carousel-arrow left-arrow hidden" aria-label="Voltar">&lt;</button>
+            <div class="shelf-row" id="${shelfId}"></div>
+            <button class="carousel-arrow right-arrow" aria-label="Avançar">&gt;</button>
         </div>
     `;
+    
+    setTimeout(() => {
+        const row = shelf.querySelector('.shelf-row');
+        const leftArrow = shelf.querySelector('.left-arrow');
+        const rightArrow = shelf.querySelector('.right-arrow');
+        
+        if (row && leftArrow && rightArrow) {
+            row.addEventListener('scroll', () => {
+                if (row.scrollLeft > 10) {
+                    leftArrow.classList.remove('hidden');
+                } else {
+                    leftArrow.classList.add('hidden');
+                }
+            });
+            
+            leftArrow.addEventListener('click', () => {
+                SoundFX.playClick();
+                row.scrollBy({ left: -row.clientWidth * 0.75, behavior: 'smooth' });
+            });
+            
+            rightArrow.addEventListener('click', () => {
+                SoundFX.playClick();
+                row.scrollBy({ left: row.clientWidth * 0.75, behavior: 'smooth' });
+            });
+        }
+    }, 50);
+    
     return shelf;
 }
 
@@ -1253,11 +1791,18 @@ function createVideoCard(channel, progress = null) {
     card.className = "video-card";
     
     const imgUrl = channel.poster_path || channel.logo;
+    const titleClean = channel.name || "Canal Sem Nome";
+    const groupClean = channel.group || "Recomendados";
+    
+    const miniPlayer = document.createElement('div');
+    miniPlayer.className = "card-mini-player-container";
+    card.appendChild(miniPlayer);
+    
     if (imgUrl && imgUrl.startsWith('http')) {
         const img = document.createElement('img');
         img.className = "card-logo";
         img.src = imgUrl;
-        img.alt = channel.name;
+        img.alt = titleClean;
         img.onerror = () => {
             img.remove();
             card.appendChild(createCardPlaceholderDOM(channel));
@@ -1266,7 +1811,7 @@ function createVideoCard(channel, progress = null) {
         
         const overlay = document.createElement('div');
         overlay.className = "card-info-overlay";
-        overlay.innerHTML = `<span class="card-title">${channel.name}</span>`;
+        overlay.innerHTML = `<span class="card-title">${titleClean}</span>`;
         card.appendChild(overlay);
     } else {
         card.appendChild(createCardPlaceholderDOM(channel));
@@ -1280,7 +1825,51 @@ function createVideoCard(channel, progress = null) {
         card.appendChild(progressEl);
     }
     
+    const hoverDetails = document.createElement('div');
+    hoverDetails.className = "card-hover-details";
+    
+    const isFav = netflixState.favorites.some(fav => fav.url === channel.url);
+    const matchScore = 90 + (titleClean.length % 10);
+    
+    hoverDetails.innerHTML = `
+        <div class="card-actions">
+            <button class="action-btn play-mini" title="Assistir">▶</button>
+            <button class="action-btn like-mini" title="Gostei">👍</button>
+            <button class="action-btn fav-mini" title="${isFav ? 'Remover da minha lista' : 'Adicionar à minha lista'}">
+                ${isFav ? '✓' : '+'}
+            </button>
+        </div>
+        <div class="card-meta">
+            <span class="meta-relevance">${matchScore}% relevante</span>
+            <span class="meta-year">2026</span>
+            <span class="meta-age">16+</span>
+            <span class="meta-quality">HD</span>
+        </div>
+        <div class="card-genres">${groupClean}</div>
+    `;
+    card.appendChild(hoverDetails);
+    
+    hoverDetails.querySelector('.play-mini').addEventListener('click', (e) => {
+        e.stopPropagation();
+        SoundFX.playTudum();
+        playVideo(channel, progress ? progress.position : 0);
+    });
+    
+    hoverDetails.querySelector('.like-mini').addEventListener('click', (e) => {
+        e.stopPropagation();
+        SoundFX.playChime();
+        showToast(`Você gostou de "${titleClean}"!`, "success");
+    });
+    
+    const favBtn = hoverDetails.querySelector('.fav-mini');
+    favBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        SoundFX.playChime();
+        toggleFavorite(channel, favBtn);
+    });
+    
     card.addEventListener('click', () => {
+        SoundFX.playClick();
         if (channel.is_series === 1) {
             openSeriesDetails(
                 channel.series_name || channel.name, 
@@ -1295,14 +1884,47 @@ function createVideoCard(channel, progress = null) {
         }
     });
     
+    let hoverTimeout = null;
+    card.addEventListener('mouseenter', () => {
+        hoverTimeout = setTimeout(() => {
+            if (!netflixState.activeHoverCard) {
+                netflixState.activeHoverCard = card;
+                miniPlayer.innerHTML = "";
+                
+                const video = document.createElement('video');
+                video.muted = true;
+                video.autoplay = true;
+                video.loop = true;
+                video.playsInline = true;
+                video.src = `/api/m3u/stream?url=${encodeURIComponent(channel.url)}`;
+                
+                miniPlayer.appendChild(video);
+                miniPlayer.classList.add('active');
+                netflixState.activeHoverVideo = video;
+            }
+        }, 1000);
+    });
+    
+    card.addEventListener('mouseleave', () => {
+        if (hoverTimeout) clearTimeout(hoverTimeout);
+        miniPlayer.classList.remove('active');
+        miniPlayer.innerHTML = "";
+        
+        if (netflixState.activeHoverCard === card) {
+            netflixState.activeHoverCard = null;
+            netflixState.activeHoverVideo = null;
+        }
+    });
+    
     return card;
 }
 
 function createCardPlaceholderDOM(channel) {
     const placeholder = document.createElement('div');
     placeholder.className = "card-placeholder";
+    const groupClean = channel.group || "Recomendados";
     placeholder.innerHTML = `
-        <span class="card-placeholder-group">${channel.group || 'Cine'}</span>
+        <span class="card-placeholder-group">${groupClean}</span>
         <span class="card-placeholder-title">${channel.name}</span>
     `;
     return placeholder;
@@ -1377,65 +1999,248 @@ function renderSearchResults(query) {
     });
 }
 
-function loadHeroBanner() {
-    if (netflixState.topCategories.length === 0 || !netflixHeroTitle) return;
+function loadHeroBanner(specificChannel = null) {
+    if (!netflixHeroTitle) return;
+    
+    if (netflixState.heroTrailerTimeout) clearTimeout(netflixState.heroTrailerTimeout);
+    if (netflixState.heroTrailerVideo) {
+        netflixState.heroTrailerVideo.remove();
+        netflixState.heroTrailerVideo = null;
+    }
+    if (netflixHeroTrailer) {
+        netflixHeroTrailer.classList.remove('active');
+        netflixHeroTrailer.innerHTML = "";
+    }
+    
+    if (specificChannel) {
+        setHeroUI(specificChannel);
+        return;
+    }
+    
+    if (netflixState.topCategories.length === 0) return;
     const cat = netflixState.topCategories[0].name;
     
-    fetch(`/api/m3u/category?category=${encodeURIComponent(cat)}&limit=10`)
+    fetch(`/api/m3u/category?category=${encodeURIComponent(cat)}&limit=20`)
     .then(r => r.json())
     .then(data => {
         if (data.success && data.channels.length > 0) {
             const idx = Math.floor(Math.random() * data.channels.length);
             const ch = data.channels[idx];
-            
-            netflixHeroTitle.textContent = ch.name;
-            if (netflixHeroCategory) netflixHeroCategory.textContent = ch.group;
-            
-            if (ch.logo && netflixHeroBg) {
-                netflixHeroBg.style.backgroundImage = `url('${ch.logo}')`;
-            } else if (netflixHeroBg) {
-                netflixHeroBg.style.backgroundImage = `linear-gradient(135deg, #1e1b4b 0%, #020617 100%)`;
-            }
-            
-            if (btnHeroPlay) {
-                btnHeroPlay.onclick = () => playVideo(ch);
-            }
+            setHeroUI(ch);
         }
     });
 }
 
+function setHeroUI(ch) {
+    netflixState.heroActiveChannel = ch;
+    netflixHeroTitle.textContent = ch.name;
+    if (netflixHeroCategory) netflixHeroCategory.textContent = ch.group || "Destaque";
+    
+    const imgUrl = ch.poster_path || ch.logo;
+    if (imgUrl && imgUrl.startsWith('http') && netflixHeroBg) {
+        netflixHeroBg.style.backgroundImage = `url('${imgUrl}')`;
+        netflixHeroBg.style.opacity = '1';
+    } else if (netflixHeroBg) {
+        netflixHeroBg.style.backgroundImage = `linear-gradient(135deg, #1f1f1f 0%, #000000 100%)`;
+        netflixHeroBg.style.opacity = '1';
+    }
+    
+    if (btnHeroPlay) {
+        btnHeroPlay.onclick = () => {
+            SoundFX.playTudum();
+            playVideo(ch);
+        };
+    }
+    if (btnHeroInfo) {
+        btnHeroInfo.onclick = () => {
+            SoundFX.playClick();
+            if (ch.is_series === 1) {
+                openSeriesDetails(ch.series_name || ch.name, ch.logo, ch.group, ch.backdrop_path, ch.overview, ch.rating);
+            } else {
+                playVideo(ch);
+            }
+        };
+    }
+    
+    if (netflixHero) {
+        netflixHero.onmouseenter = () => {
+            if (netflixState.heroTrailerTimeout) clearTimeout(netflixState.heroTrailerTimeout);
+            netflixState.heroTrailerTimeout = setTimeout(() => {
+                if (!netflixHeroTrailer) return;
+                
+                const video = document.createElement('video');
+                video.muted = true;
+                video.autoplay = true;
+                video.loop = true;
+                video.src = `/api/m3u/stream?url=${encodeURIComponent(ch.url)}`;
+                netflixHeroTrailer.appendChild(video);
+                netflixHeroTrailer.classList.add('active');
+                netflixState.heroTrailerVideo = video;
+            }, 1500);
+        };
+        
+        netflixHero.onmouseleave = () => {
+            if (netflixState.heroTrailerTimeout) clearTimeout(netflixState.heroTrailerTimeout);
+            if (netflixState.heroTrailerVideo) {
+                netflixState.heroTrailerVideo.remove();
+                netflixState.heroTrailerVideo = null;
+            }
+            if (netflixHeroTrailer) {
+                netflixHeroTrailer.classList.remove('active');
+                netflixHeroTrailer.innerHTML = "";
+            }
+        };
+    }
+}
+
 function playVideo(channel, startPosition = 0) {
-    if (!netflixPlayerModal || !netflixVideo) return;
+    if (!netflixPlayerModal || !netflixState.videoJsPlayer) return;
+    
+    // Remove listener de teclado antigo se houver
+    if (netflixState.playerKeyDownHandler) {
+        document.removeEventListener('keydown', netflixState.playerKeyDownHandler);
+        netflixState.playerKeyDownHandler = null;
+    }
+    
     netflixState.currentVideoInfo = channel;
     netflixPlayerModal.classList.remove('hidden');
+    document.body.classList.add('modal-open');
+    SoundFX.playTudum();
+    
+    // Registra listener de teclado para controle do player
+    const handlePlayerKeyDown = (e) => {
+        const player = netflixState.videoJsPlayer;
+        if (!player || (netflixPlayerModal && netflixPlayerModal.classList.contains('hidden'))) return;
+        
+        // Evita atalhos padrões do browser
+        if (['Space', ' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key) || e.code === 'Space') {
+            e.preventDefault();
+        }
+        
+        if (e.key === ' ' || e.code === 'Space') {
+            if (player.paused()) {
+                player.play().catch(() => {});
+            } else {
+                player.pause();
+            }
+        } else if (e.key === 'ArrowLeft') {
+            const newTime = Math.max(0, player.currentTime() - 10);
+            player.currentTime(newTime);
+            showToast("Retroceder 10s", "info");
+        } else if (e.key === 'ArrowRight') {
+            const newTime = Math.min(player.duration() || Infinity, player.currentTime() + 10);
+            player.currentTime(newTime);
+            showToast("Avançar 10s", "info");
+        } else if (e.key === 'ArrowUp') {
+            const newVol = Math.min(1.0, player.volume() + 0.1);
+            player.volume(newVol);
+        } else if (e.key === 'ArrowDown') {
+            const newVol = Math.max(0.0, player.volume() - 0.1);
+            player.volume(newVol);
+        } else if (e.key.toLowerCase() === 'f') {
+            if (player.isFullscreen()) {
+                player.exitFullscreen();
+            } else {
+                player.requestFullscreen();
+            }
+        }
+    };
+    document.addEventListener('keydown', handlePlayerKeyDown);
+    netflixState.playerKeyDownHandler = handlePlayerKeyDown;
+    
+    let isStarted = false;
+    
+    // Função utilitária para limpar watchdogs locais
+    const clearWatchdogs = () => {
+        if (netflixState.playbackWatchdog) {
+            clearTimeout(netflixState.playbackWatchdog);
+            netflixState.playbackWatchdog = null;
+        }
+        if (netflixState.bufferingWatchdog) {
+            clearTimeout(netflixState.bufferingWatchdog);
+            netflixState.bufferingWatchdog = null;
+        }
+    };
     
     const initPlayer = (pos) => {
-        // Limpa instancias anteriores
-        if (netflixState.hlsInstance) {
-            netflixState.hlsInstance.destroy();
-            netflixState.hlsInstance = null;
-        }
+        const player = netflixState.videoJsPlayer;
+        
+        // Limpa watchdogs e mpegts antigos
+        clearWatchdogs();
         if (netflixState.mpegtsInstance) {
             netflixState.mpegtsInstance.destroy();
             netflixState.mpegtsInstance = null;
         }
         
-        netflixVideo.src = "";
+        // Remove todos os event listeners anteriores do Video.js para não duplicar
+        player.off('playing');
+        player.off('timeupdate');
+        player.off('waiting');
+        player.off('error');
+        player.off('ended');
+        player.off('loadedmetadata');
+        
+        player.reset();
         
         const urlLower = channel.url.toLowerCase();
         const isM3U8 = urlLower.includes('.m3u8');
         const isTS = urlLower.includes('.ts') || urlLower.includes('output=ts') || urlLower.includes('output=mpegts');
         
-        netflixVideo.onloadedmetadata = () => {
-            if (pos > 0 && netflixVideo.duration && netflixVideo.duration !== Infinity) {
-                netflixVideo.currentTime = pos;
+        const playUrl = `/api/m3u/stream?url=${encodeURIComponent(channel.url)}`;
+        
+        // Watchdog de carregamento inicial (8 segundos)
+        netflixState.playbackWatchdog = setTimeout(() => {
+            if (!isStarted) {
+                console.warn("[Watchdog] A reprodução do canal demorou mais de 8s para iniciar.");
+                showToast("A transmissão está demorando muito para responder ou está offline.", "warning");
+                closePlayer();
             }
-            netflixVideo.play().catch(() => {
+        }, 8000);
+        
+        // Configura os event listeners usando a API do Video.js
+        player.on('playing', () => {
+            isStarted = true;
+            clearWatchdogs();
+        });
+        
+        player.on('timeupdate', () => {
+            if (player.currentTime() > 0.1 && !isStarted) {
+                isStarted = true;
+                clearWatchdogs();
+            }
+        });
+        
+        player.on('waiting', () => {
+            if (isStarted) {
+                if (!netflixState.bufferingWatchdog) {
+                    netflixState.bufferingWatchdog = setTimeout(() => {
+                        console.warn("[Watchdog] O buffer da transmissão travou por mais de 8s.");
+                        showToast("Conexão instável ou canal offline. Transmissão interrompida.", "error");
+                        closePlayer();
+                    }, 8000);
+                }
+            }
+        });
+        
+        player.on('error', () => {
+            if (netflixState.currentVideoInfo) {
+                const err = player.error();
+                console.error("Erro no Video.js player:", err);
+                showToast("Erro ao reproduzir canal. A transmissão pode estar offline.", "error");
+                closePlayer();
+            }
+        });
+        
+        player.on('loadedmetadata', () => {
+            if (pos > 0 && player.duration() && player.duration() !== Infinity) {
+                player.currentTime(pos);
+            }
+            player.play().catch(() => {
                 console.log("Auto-play bloqueado pelo navegador, aguardando clique.");
             });
-        };
+        });
         
-        netflixVideo.onended = () => {
+        player.on('ended', () => {
             if (netflixState.currentSeriesEpisodes && netflixState.currentSeriesEpisodes.length > 0 && netflixState.currentEpisode) {
                 const currentEp = netflixState.currentEpisode;
                 
@@ -1463,33 +2268,38 @@ function playVideo(channel, startPosition = 0) {
                 }
             }
             closePlayer();
-        };
+        });
         
+        // Define a fonte e carrega
         if (isTS && typeof mpegts !== 'undefined' && mpegts.getFeatureList().mseLivePlayback) {
+            // Integração híbrida: recupera a tag <video> interna gerida pelo Video.js
+            const videoEl = player.el().querySelector('video');
             const mpegtsPlayer = mpegts.createPlayer({
                 type: 'mse',
                 isLive: true,
-                url: channel.url
+                url: playUrl
             });
             netflixState.mpegtsInstance = mpegtsPlayer;
-            mpegtsPlayer.attachMediaElement(netflixVideo);
+            mpegtsPlayer.attachMediaElement(videoEl);
+            
+            mpegtsPlayer.on(mpegts.Events.ERROR, (type, detail, info) => {
+                console.error("MPEG-TS Error:", type, detail, info);
+                showToast("Erro na transmissão MPEG-TS. Canal offline.", "error");
+                closePlayer();
+            });
+            
             mpegtsPlayer.load();
+            player.play().catch(() => {});
         } else if (isM3U8) {
-            if (netflixVideo.canPlayType('application/vnd.apple.mpegurl')) {
-                netflixVideo.src = channel.url;
-            } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-                const hls = new Hls({
-                    maxMaxBufferLength: 10,
-                    enableWorker: true
-                });
-                netflixState.hlsInstance = hls;
-                hls.loadSource(channel.url);
-                hls.attachMedia(netflixVideo);
-            } else {
-                netflixVideo.src = channel.url;
-            }
+            player.src({
+                src: playUrl,
+                type: 'application/x-mpegURL'
+            });
         } else {
-            netflixVideo.src = channel.url;
+            player.src({
+                src: playUrl,
+                type: 'video/mp4'
+            });
         }
     };
     
@@ -1508,9 +2318,10 @@ function playVideo(channel, startPosition = 0) {
 
     clearInterval(netflixState.historySaveInterval);
     netflixState.historySaveInterval = setInterval(() => {
-        if (!netflixVideo.paused && netflixVideo.currentTime > 0) {
-            const pos = netflixVideo.currentTime;
-            const dur = netflixVideo.duration || 0.0;
+        const player = netflixState.videoJsPlayer;
+        if (player && !player.paused() && player.currentTime() > 0) {
+            const pos = player.currentTime();
+            const dur = player.duration() || 0.0;
             
             fetch('/api/m3u/history/update', {
                 method: 'POST',
@@ -1531,18 +2342,38 @@ function playVideo(channel, startPosition = 0) {
 function closePlayer() {
     if (!netflixVideo) return;
     clearInterval(netflixState.historySaveInterval);
-    netflixVideo.pause();
     
-    if (netflixState.hlsInstance) {
-        netflixState.hlsInstance.destroy();
-        netflixState.hlsInstance = null;
+    // Remove listener de teclado do player
+    if (netflixState.playerKeyDownHandler) {
+        document.removeEventListener('keydown', netflixState.playerKeyDownHandler);
+        netflixState.playerKeyDownHandler = null;
     }
+    
+    // Limpa watchdogs ativos
+    if (netflixState.playbackWatchdog) {
+        clearTimeout(netflixState.playbackWatchdog);
+        netflixState.playbackWatchdog = null;
+    }
+    if (netflixState.bufferingWatchdog) {
+        clearTimeout(netflixState.bufferingWatchdog);
+        netflixState.bufferingWatchdog = null;
+    }
+    
+    if (netflixState.videoJsPlayer) {
+        netflixState.videoJsPlayer.off('playing');
+        netflixState.videoJsPlayer.off('timeupdate');
+        netflixState.videoJsPlayer.off('waiting');
+        netflixState.videoJsPlayer.off('error');
+        netflixState.videoJsPlayer.off('ended');
+        netflixState.videoJsPlayer.off('loadedmetadata');
+        
+        netflixState.videoJsPlayer.reset();
+    }
+    
     if (netflixState.mpegtsInstance) {
         netflixState.mpegtsInstance.destroy();
         netflixState.mpegtsInstance = null;
     }
-    
-    netflixVideo.src = "";
     
     // Reseta estado de autoplay do episódio
     netflixState.currentSeriesEpisodes = null;
@@ -1550,6 +2381,7 @@ function closePlayer() {
     netflixState.currentEpisode = null;
     
     if (netflixPlayerModal) netflixPlayerModal.classList.add('hidden');
+    document.body.classList.remove('modal-open');
     netflixState.currentVideoInfo = null;
     
     renderShelves();
@@ -1557,6 +2389,7 @@ function closePlayer() {
 
 function openSeriesDetails(seriesName, logo, group, backdrop = "", overview = "", rating = 0.0) {
     if (!netflixSeriesModal) return;
+    document.body.classList.add('modal-open');
     
     seriesModalTitle.textContent = seriesName;
     seriesModalGroup.textContent = group;
@@ -1673,7 +2506,211 @@ function renderActiveSeasonEpisodes(seasonNum) {
 
 function closeSeriesDetails() {
     if (netflixSeriesModal) netflixSeriesModal.classList.add('hidden');
+    document.body.classList.remove('modal-open');
     seriesEpisodesData = [];
 }
 
+function showToast(message, type = 'error') {
+    let container = document.querySelector('.toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
+    
+    const toast = document.createElement('div');
+    toast.className = `toast-notification ${type}`;
+    
+    let icon = 'ℹ️';
+    if (type === 'error') icon = '❌';
+    else if (type === 'success') icon = '✅';
+    else if (type === 'warning') icon = '⚠️';
+    
+    toast.innerHTML = `
+        <span class="toast-icon">${icon}</span>
+        <span class="toast-message">${message}</span>
+    `;
+    
+    container.appendChild(toast);
+    
+    setTimeout(() => {
+        toast.remove();
+        if (container.children.length === 0) {
+            container.remove();
+        }
+    }, 5000);
+}
 
+function uploadPlaylistFile(file) {
+    const reader = new FileReader();
+    const name = playlistNewName.value.trim() || file.name.replace(/\.[^/.]+$/, "");
+    
+    showToast("Processando arquivo...", "info");
+    
+    reader.onload = function(e) {
+        const text = e.target.result;
+        fetch('/api/m3u/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: name,
+                content: text
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                playlistNewName.value = "";
+                showToast(`Lista "${name}" importada! ${data.count} canais analisados.`, "success");
+                SoundFX.playChime();
+                fetchPlaylists();
+                checkM3UStatus();
+            } else {
+                showToast(`Erro ao importar: ${data.error}`, "error");
+            }
+        })
+        .catch(() => {
+            showToast("Erro de conexão ao enviar arquivo.", "error");
+        });
+    };
+    reader.readAsText(file);
+}
+
+function fetchPlaylists() {
+    if (!playlistsListContainer) return;
+    
+    playlistsListContainer.innerHTML = `<p style="color: var(--text-secondary); text-align: center; padding: 20px;">Carregando listas...</p>`;
+    
+    fetch('/api/m3u/playlists')
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            playlistsListContainer.innerHTML = "";
+            if (data.playlists.length === 0) {
+                playlistsListContainer.innerHTML = `<p style="color: var(--text-secondary); text-align: center; padding: 20px;">Nenhuma lista cadastrada.</p>`;
+                return;
+            }
+            
+            data.playlists.forEach(pl => {
+                const item = document.createElement('div');
+                item.className = "playlist-item-row";
+                item.style.display = "flex";
+                item.style.alignItems = "center";
+                item.style.justifyContent = "space-between";
+                item.style.padding = "12px 16px";
+                item.style.background = "rgba(255, 255, 255, 0.03)";
+                item.style.border = "1px solid rgba(255, 255, 255, 0.05)";
+                item.style.borderRadius = "8px";
+                item.style.gap = "15px";
+                
+                item.innerHTML = `
+                    <div style="flex: 1; display: flex; flex-direction: column; gap: 4px;">
+                        <span style="font-weight: 600; color: #fff; font-size: 0.95rem;">${pl.name}</span>
+                        <span style="font-size: 0.8rem; color: var(--text-secondary);">${pl.channel_count} canais &bull; ${pl.url !== 'Upload de Arquivo' ? 'Remota' : 'Arquivo Local'}</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <label class="switch-toggle" style="position: relative; display: inline-block; width: 44px; height: 24px;">
+                            <input type="checkbox" class="toggle-active-checkbox" data-id="${pl.id}" ${pl.active === 1 ? 'checked' : ''} style="opacity: 0; width: 0; height: 0;">
+                            <span class="slider-toggle-round" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #333; transition: .3s; border-radius: 24px;"></span>
+                        </label>
+                        <button class="btn-playlist-delete" data-id="${pl.id}" style="background: none; border: none; color: #777; cursor: pointer; padding: 5px; font-size: 1.1rem; transition: color 0.2s;" title="Excluir Lista">🗑️</button>
+                    </div>
+                `;
+                
+                const checkbox = item.querySelector('.toggle-active-checkbox');
+                const slider = item.querySelector('.slider-toggle-round');
+                
+                const updateSwitchStyle = () => {
+                    if (checkbox.checked) {
+                        slider.style.backgroundColor = 'var(--primary-color)';
+                        slider.style.boxShadow = '0 0 8px rgba(229, 9, 20, 0.5)';
+                    } else {
+                        slider.style.backgroundColor = '#333';
+                        slider.style.boxShadow = 'none';
+                    }
+                };
+                
+                const handle = document.createElement('span');
+                handle.style.position = 'absolute';
+                handle.style.content = '""';
+                handle.style.height = '18px';
+                handle.style.width = '18px';
+                handle.style.left = '3px';
+                handle.style.bottom = '3px';
+                handle.style.backgroundColor = 'white';
+                handle.style.transition = '.3s';
+                handle.style.borderRadius = '50%';
+                slider.appendChild(handle);
+                
+                const updateHandlePosition = () => {
+                    if (checkbox.checked) {
+                        handle.style.transform = 'translateX(20px)';
+                    } else {
+                        handle.style.transform = 'translateX(0)';
+                    }
+                };
+                
+                checkbox.addEventListener('change', () => {
+                    SoundFX.playClick();
+                    updateSwitchStyle();
+                    updateHandlePosition();
+                    togglePlaylistActive(pl.id, checkbox.checked ? 1 : 0);
+                });
+                
+                updateSwitchStyle();
+                updateHandlePosition();
+                
+                item.querySelector('.btn-playlist-delete').addEventListener('click', () => {
+                    if (confirm(`Tem certeza que deseja remover a lista "${pl.name}"? Todos os canais dela serão apagados.`)) {
+                        SoundFX.playClick();
+                        deletePlaylist(pl.id);
+                    }
+                });
+                
+                playlistsListContainer.appendChild(item);
+            });
+        }
+    });
+}
+
+function togglePlaylistActive(playlistId, activeState) {
+    fetch('/api/m3u/playlists/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: playlistId, active: activeState })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            showToast(activeState === 1 ? "Lista ativada com sucesso!" : "Lista desativada.", "success");
+            checkM3UStatus();
+        } else {
+            showToast("Erro ao alterar estado da lista.", "error");
+        }
+    })
+    .catch(() => {
+        showToast("Erro de rede.", "error");
+    });
+}
+
+function deletePlaylist(playlistId) {
+    fetch('/api/m3u/playlists/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: playlistId })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            showToast("Lista removida com sucesso.", "success");
+            SoundFX.playChime();
+            fetchPlaylists();
+            checkM3UStatus();
+        } else {
+            showToast("Erro ao remover lista.", "error");
+        }
+    })
+    .catch(() => {
+        showToast("Erro de rede.", "error");
+    });
+}
