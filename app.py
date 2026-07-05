@@ -187,6 +187,69 @@ def fetch_tmdb_metadata(name, is_series=False):
 import queue
 tmdb_queue = queue.Queue()
 
+preload_tasks = {}
+
+def get_url_hash(url):
+    import hashlib
+    return hashlib.md5(url.encode('utf-8')).hexdigest()
+
+def start_preload_task(url):
+    import urllib.request
+    import ssl
+    h = get_url_hash(url)
+    cache_path = os.path.join(BASE_DIR, 'static', 'cache', f"{h}.part")
+    
+    if os.path.exists(cache_path) and os.path.getsize(cache_path) > 15 * 1024 * 1024:
+        print(f"[Preload] Vídeo {url} já possui pre-buffer local suficiente ({os.path.getsize(cache_path)/(1024*1024):.2f}MB).")
+        return
+        
+    if h in preload_tasks:
+        return
+        
+    def worker():
+        try:
+            print(f"[Preload] Iniciando pre-buffer assíncrono para: {url}")
+            preload_tasks[h] = True
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0'
+            }
+            req = urllib.request.Request(url, headers=headers)
+            ssl_context = ssl._create_unverified_context()
+            
+            with urllib.request.urlopen(req, timeout=12.0, context=ssl_context) as response:
+                content_length = response.headers.get('Content-Length')
+                
+                limit = 60 * 1024 * 1024 
+                if content_length:
+                    total_sz = int(content_length)
+                    limit = min(limit, int(total_sz * 0.20))
+                    limit = max(limit, min(total_sz, 15 * 1024 * 1024))
+                
+                bytes_downloaded = 0
+                temp_path = cache_path + ".tmp"
+                
+                with open(temp_path, "wb") as f:
+                    while bytes_downloaded < limit:
+                        chunk = response.read(65536)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        bytes_downloaded += len(chunk)
+                
+                if os.path.exists(temp_path):
+                    if os.path.exists(cache_path):
+                        os.remove(cache_path)
+                    os.rename(temp_path, cache_path)
+                    print(f"[Preload] Pre-buffer de {bytes_downloaded / (1024*1024):.2f}MB concluído com sucesso.")
+        except Exception as e:
+            print(f"[Preload] Erro ao baixar pre-buffer: {e}")
+        finally:
+            preload_tasks.pop(h, None)
+            
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def tmdb_worker():
     idle_sleep = False
     
@@ -1009,6 +1072,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.handle_m3u_history_position()
         elif parsed_path.path == '/api/m3u/series/episodes':
             self.handle_m3u_series_episodes()
+        elif parsed_path.path == '/api/m3u/preload':
+            self.handle_m3u_preload()
         elif parsed_path.path == '/api/m3u/stream':
             self.handle_m3u_stream()
         elif parsed_path.path.startswith('/api/'):
@@ -1717,11 +1782,23 @@ class BulbHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error_response(str(e))
 
+    def handle_m3u_preload(self):
+        parsed = urlparse(self.path)
+        queries = parse_qs(parsed.query)
+        url = queries.get('url', [''])[0].strip()
+        if not url:
+            self.send_error_response("URL inválida.", 400)
+            return
+            
+        start_preload_task(url)
+        self.send_json_response({"success": True, "message": "Preload iniciado em segundo plano."})
+
     def handle_m3u_stream(self):
         import urllib.request
         import urllib.error
         import socket
         import ssl
+        import hashlib
         
         parsed = urlparse(self.path)
         queries = parse_qs(parsed.query)
@@ -1731,23 +1808,127 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.send_error_response("URL de stream inválida.", 400)
             return
 
-        print(f"[Stream Proxy] Conectando ao stream: {stream_url}")
+        # Verifica cache local
+        h = get_url_hash(stream_url)
+        cache_path = os.path.join(BASE_DIR, 'static', 'cache', f"{h}.part")
+        is_mp4 = not '.m3u8' in stream_url.lower() and not '.ts' in stream_url.lower()
+        has_cache = is_mp4 and os.path.exists(cache_path)
+        cache_size = os.path.getsize(cache_path) if has_cache else 0
+        
+        # Parse range header
+        range_header = self.headers.get('Range')
+        start_byte = 0
+        end_byte = None
+        if range_header:
+            match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+            if match:
+                start_byte = int(match.group(1))
+                if match.group(2):
+                    end_byte = int(match.group(2))
+
+        # Cenário 1: Temos cache local para essa faixa de bytes (MP4 / Séries e Filmes)
+        if has_cache and start_byte < cache_size:
+            print(f"[Stream Proxy] Servindo pre-buffer local para {stream_url} (byte {start_byte} até {cache_size})")
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0',
+                'Range': 'bytes=0-1'
+            }
+            req = urllib.request.Request(stream_url, headers=headers)
+            ssl_context = ssl._create_unverified_context()
+            
+            total_length = None
+            content_type = 'video/mp4'
+            
+            try:
+                with urllib.request.urlopen(req, timeout=3.0, context=ssl_context) as head_res:
+                    content_range = head_res.headers.get('Content-Range')
+                    content_type = head_res.headers.get('Content-Type', 'video/mp4')
+                    if content_range:
+                        total_length = int(content_range.split('/')[-1])
+            except Exception as ex:
+                print(f"[Stream Proxy] Falha ao obter cabeçalhos remotos para pre-buffer: {ex}")
+            
+            self.send_response(206)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Accept-Ranges', 'bytes')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-cache')
+            
+            limit_end = total_length - 1 if total_length else None
+            if end_byte is not None:
+                limit_end = end_byte
+                
+            if total_length:
+                if end_byte is not None:
+                    self.send_header('Content-Length', str(end_byte - start_byte + 1))
+                else:
+                    self.send_header('Content-Length', str(total_length - start_byte))
+                self.send_header('Content-Range', f"bytes {start_byte}-{limit_end}/{total_length}")
+            
+            self.end_headers()
+            
+            # Transmite os bytes locais
+            local_limit = min(cache_size, limit_end + 1) if limit_end is not None else cache_size
+            bytes_to_send = local_limit - start_byte
+            
+            if bytes_to_send > 0:
+                try:
+                    with open(cache_path, "rb") as f_cache:
+                        f_cache.seek(start_byte)
+                        served = 0
+                        while served < bytes_to_send:
+                            to_read = min(65536, bytes_to_send - served)
+                            chunk = f_cache.read(to_read)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
+                            served += len(chunk)
+                    start_byte += served
+                except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+                    print("[Stream Proxy] Cliente desconectou durante envio do pre-buffer.")
+                    return
+            
+            # Transmitiu o cache local. Se o vídeo for maior e o cliente quer mais, continua pela internet
+            if total_length and start_byte < total_length and (end_byte is None or start_byte <= end_byte):
+                print(f"[Stream Proxy] Pre-buffer concluído. Continuando da internet a partir de {start_byte}...")
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0',
+                    'Range': f"bytes={start_byte}-{end_byte if end_byte is not None else ''}"
+                }
+                req = urllib.request.Request(stream_url, headers=headers)
+                try:
+                    with urllib.request.urlopen(req, timeout=10.0, context=ssl_context) as internet_res:
+                        while True:
+                            chunk = internet_res.read(65536)
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
+                except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+                    pass
+                except Exception as ex:
+                    print(f"[Stream Proxy] Erro no stream da internet após pre-buffer: {ex}")
+            return
+
+        # Cenário 2: Sem cache local (comportamento normal)
+        print(f"[Stream Proxy] Conectando direto ao stream remoto: {stream_url}")
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/120.0.0.0'
         }
-        # Repassa cabeçalhos importantes de compatibilidade
-        for h in ['Range', 'Authorization', 'Cookie', 'X-Playback-Session-Id']:
-            if h in self.headers:
-                headers[h] = self.headers[h]
-                if h == 'Range':
+        for h_name in ['Range', 'Authorization', 'Cookie', 'X-Playback-Session-Id']:
+            if h_name in self.headers:
+                headers[h_name] = self.headers[h_name]
+                if h_name == 'Range':
                     print(f"[Stream Proxy] Repassando cabeçalho Range: {self.headers['Range']}")
             
         req = urllib.request.Request(stream_url, headers=headers)
-        
         response = None
         try:
             # Cria contexto de SSL sem verificação (essencial para compatibilidade com certificados autoassinados/inválidos comuns em listas IPTV)
+            ssl_context = ssl._create_unverified_context()        # Cria contexto de SSL sem verificação (essencial para compatibilidade com certificados autoassinados/inválidos comuns em listas IPTV)
             ssl_context = ssl._create_unverified_context()
             
             # Abre a URL remota com timeout de 5.0 segundos e contexto SSL tolerante

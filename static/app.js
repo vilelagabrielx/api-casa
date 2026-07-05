@@ -971,7 +971,8 @@ let netflixState = {
     // Controle do popup de próximo episódio
     nextEpisodeDismissed: false,
     nextEpisodeAutoPlayTriggered: false,
-    nextEpisodeTimerInterval: null
+    nextEpisodeTimerInterval: null,
+    nextEpisodePreloaded: false
 };
 
 // Bind de Elementos
@@ -2121,6 +2122,7 @@ function playVideo(channel, startPosition = 0) {
     // Reseta estado do próximo episódio
     netflixState.nextEpisodeDismissed = false;
     netflixState.nextEpisodeAutoPlayTriggered = false;
+    netflixState.nextEpisodePreloaded = false;
     if (netflixState.nextEpisodeTimerInterval) {
         clearInterval(netflixState.nextEpisodeTimerInterval);
         netflixState.nextEpisodeTimerInterval = null;
@@ -2280,14 +2282,28 @@ function playVideo(channel, startPosition = 0) {
 
             // Pop-up do próximo episódio nos últimos minutos/segundos
             const nextEp = getNextEpisode();
-            if (nextEp && !netflixState.nextEpisodeDismissed && !netflixState.nextEpisodeAutoPlayTriggered) {
+            if (nextEp) {
                 const dur = player.duration();
                 const cur = player.currentTime();
                 if (dur && dur !== Infinity && dur > 60) {
                     const timeLeft = dur - cur;
 
+                    // Pré-carrega o próximo episódio em background no servidor quando o atual atinge 70% de reprodução
+                    if (cur / dur >= 0.70 && !netflixState.nextEpisodePreloaded) {
+                        netflixState.nextEpisodePreloaded = true;
+                        console.log("[Cine Casa] Progresso atingiu 70%. Solicitando pre-buffer do próximo episódio...");
+                        fetch(`/api/m3u/preload?url=${encodeURIComponent(nextEp.url)}`)
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.success) {
+                                console.log("[Cine Casa] Pre-buffer do próximo episódio iniciado no servidor.");
+                            }
+                        })
+                        .catch(err => console.warn("[Cine Casa] Falha no pre-buffer do próximo episódio:", err));
+                    }
+
                     // Mostra o card se faltar 45 segundos ou menos
-                    if (timeLeft <= 45 && timeLeft > 2) {
+                    if (timeLeft <= 45 && timeLeft > 2 && !netflixState.nextEpisodeDismissed && !netflixState.nextEpisodeAutoPlayTriggered) {
                         const nextCard = document.getElementById('next-episode-card');
                         if (nextCard && nextCard.classList.contains('hidden')) {
                             const nextEpTitle = document.getElementById('next-episode-title');
