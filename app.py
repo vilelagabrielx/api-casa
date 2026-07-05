@@ -1335,9 +1335,20 @@ class BulbHandler(SimpleHTTPRequestHandler):
                 else:
                     playlist_name = f"Lista IPTV {int(time.time())}"
 
-            # Conecta e cria a playlist no banco
+            # Conecta e cria a playlist no banco, verificando duplicatas de URL
             conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
+            
+            if m3u_url:
+                cursor.execute("SELECT name FROM playlists WHERE url = ?", (m3u_url,))
+                exists = cursor.fetchone()
+                if exists:
+                    conn.close()
+                    self.send_json_response({
+                        "success": False,
+                        "error": f"Esta lista M3U já está cadastrada com o nome: '{exists[0]}'."
+                    }, 400)
+                    return
             
             cursor.execute(
                 "INSERT INTO playlists (name, url, active) VALUES (?, ?, 1)",
