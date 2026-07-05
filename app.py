@@ -255,6 +255,7 @@ def async_import_worker(m3u_url, m3u_content, playlist_name, is_json, post_data)
         import_status["message"] = f"Salvando {len(parsed_channels)} canais no banco de dados..."
         
         conn = sqlite3.connect(DB_PATH, timeout=30.0)
+        conn.execute('PRAGMA journal_mode=WAL')
         cursor = conn.cursor()
         
         cursor.execute(
@@ -510,6 +511,7 @@ def tmdb_worker():
 def init_db():
     os.makedirs(os.path.join(BASE_DIR, 'static', 'cache'), exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    conn.execute('PRAGMA journal_mode=WAL')
     cursor = conn.cursor()
     
     # Migração automática do schema anterior do banco de dados para suportar playlists
