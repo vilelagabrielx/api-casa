@@ -889,6 +889,8 @@ threading.Thread(target=master_audio_loop, daemon=True).start()
 # =================================================================
 
 class BulbHandler(SimpleHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
     def translate_path(self, path):
         path = super().translate_path(path)
         relpath = os.path.relpath(path, os.getcwd())
@@ -981,10 +983,11 @@ class BulbHandler(SimpleHTTPRequestHandler):
             lamp = get_lamp()
             status = lamp.status()
             if not status or 'Error' in status:
-                raise Exception("Lâmpada offline ou IP incorreto.")
-            self.send_json_response({"success": True, "status": status})
+                self.send_json_response({"success": False, "status": "offline"})
+            else:
+                self.send_json_response({"success": True, "status": status})
         except Exception as e:
-            self.send_error_response(str(e))
+            self.send_json_response({"success": False, "status": "offline", "error": str(e)})
 
     def handle_toggle(self):
         try:
