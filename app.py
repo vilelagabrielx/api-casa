@@ -193,7 +193,27 @@ def get_url_hash(url):
     import hashlib
     return hashlib.md5(url.encode('utf-8')).hexdigest()
 
+def cleanup_old_preloads():
+    try:
+        cache_dir = os.path.join(BASE_DIR, 'static', 'cache')
+        if not os.path.exists(cache_dir):
+            return
+        files = [os.path.join(cache_dir, f) for f in os.listdir(cache_dir) if f.endswith('.part')]
+        # Mantém no máximo os 3 pre-buffers mais recentes para economizar espaço físico no Termux
+        if len(files) > 3:
+            files.sort(key=os.path.getmtime)
+            to_delete = files[:-3]
+            for f in to_delete:
+                try:
+                    os.remove(f)
+                    print(f"[Preload Cleanup] Removido cache antigo do disco: {os.path.basename(f)}")
+                except Exception:
+                    pass
+    except Exception as e:
+        print("[Preload Cleanup] Erro:", e)
+
 def start_preload_task(url):
+    cleanup_old_preloads()
     import urllib.request
     import ssl
     h = get_url_hash(url)
