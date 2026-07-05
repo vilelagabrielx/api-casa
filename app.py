@@ -359,6 +359,7 @@ def init_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_group ON channels(group_title)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_name ON channels(name)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_series ON channels(is_series, series_name)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_group_series ON channels(group_title, is_series)')
     
     # Histórico de reprodução (Continuar Assistindo)
     cursor.execute('''
@@ -1492,41 +1493,47 @@ class BulbHandler(SimpleHTTPRequestHandler):
             conn = sqlite3.connect(DB_PATH, timeout=30.0)
             cursor = conn.cursor()
             
-            # Filtros aplicados sobre a seleção combinada (não-séries + séries agrupadas)
-            where_clauses = ["playlist_id IN (SELECT id FROM playlists WHERE active = 1)"]
-            params = []
+            # Filtros aplicados diretamente sobre cada braço do UNION ALL para usar índices eficientemente
+            braço1_clauses = ["is_series = 0", "playlist_id IN (SELECT id FROM playlists WHERE active = 1)"]
+            braço2_clauses = ["is_series = 1", "playlist_id IN (SELECT id FROM playlists WHERE active = 1)"]
+            braço_params = []
             
             if category:
-                where_clauses.append("group_title = ?")
-                params.append(category)
+                braço1_clauses.append("group_title = ?")
+                braço2_clauses.append("group_title = ?")
+                braço_params.append(category)
             if search:
-                # Busca pelo nome do canal original ou pelo nome limpo da série
-                where_clauses.append("(name LIKE ? OR series_name LIKE ?)")
-                params.append(f"%{search}%")
-                params.append(f"%{search}%")
+                braço1_clauses.append("(name LIKE ? OR series_name LIKE ?)")
+                braço2_clauses.append("(name LIKE ? OR series_name LIKE ?)")
+                braço_params.append(f"%{search}%")
+                braço_params.append(f"%{search}%")
                 
-            where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+            braço1_sql = " WHERE " + " AND ".join(braço1_clauses)
+            braço2_sql = " WHERE " + " AND ".join(braço2_clauses)
             
-            # Consulta combinada filtrando por playlist ativa
-            subquery = '''
-                SELECT id, name, logo, group_title, url, 0 AS is_series, NULL AS series_name, poster_path, backdrop_path, overview, rating, tmdb_queried, playlist_id
+            # Os parâmetros para a query combinada são os parâmetros de cada braço duplicados (uma vez para cada SELECT)
+            params = braço_params + braço_params
+            
+            # Consulta combinada otimizada
+            subquery = f'''
+                SELECT id, name, logo, group_title, url, 0 AS is_series, NULL AS series_name, poster_path, backdrop_path, overview, rating, tmdb_queried
                 FROM channels 
-                WHERE is_series = 0 AND playlist_id IN (SELECT id FROM playlists WHERE active = 1)
+                {braço1_sql}
                 
                 UNION ALL
                 
-                SELECT MIN(id) as id, series_name as name, logo, group_title, '' as url, 1 as is_series, series_name, poster_path, backdrop_path, overview, rating, tmdb_queried, playlist_id
+                SELECT MIN(id) as id, series_name as name, logo, group_title, '' as url, 1 as is_series, series_name, poster_path, backdrop_path, overview, rating, tmdb_queried
                 FROM channels 
-                WHERE is_series = 1 AND playlist_id IN (SELECT id FROM playlists WHERE active = 1)
+                {braço2_sql}
                 GROUP BY series_name
             '''
             
-            # Conta o total correspondente
-            cursor.execute(f"SELECT COUNT(*) FROM ({subquery}){where_sql}", params)
+            # Conta o total correspondente de forma extremamente rápida
+            cursor.execute(f"SELECT COUNT(*) FROM ({subquery})", params)
             total = cursor.fetchone()[0]
             
-            # Busca canais paginados
-            query_sql = f"SELECT id, name, logo, group_title, url, is_series, series_name, poster_path, backdrop_path, overview, rating, tmdb_queried FROM ({subquery}){where_sql} ORDER BY name ASC LIMIT ? OFFSET ?"
+            # Busca canais paginados usando índices
+            query_sql = f"SELECT id, name, logo, group_title, url, is_series, series_name, poster_path, backdrop_path, overview, rating, tmdb_queried FROM ({subquery}) ORDER BY name ASC LIMIT ? OFFSET ?"
             cursor.execute(query_sql, params + [limit, offset])
             rows = cursor.fetchall()
             conn.close()
