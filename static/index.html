@@ -15,7 +15,7 @@
     <script src="https://vjs.zencdn.net/8.10.0/video.min.js"></script>
     <!-- Mpegts.js for IPTV / .ts streaming -->
     <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=2.3">
+    <link rel="stylesheet" href="style.css?v=2.6">
 </head>
 <body>
     <div class="background-glow"></div>
@@ -365,6 +365,27 @@
         <div class="player-wrapper">
             <video id="netflix-video" class="video-js vjs-default-skin vjs-big-play-centered" playsinline></video>
         </div>
+        
+        <!-- Pop-up de Próximo Episódio (Estilo Netflix) -->
+        <div id="next-episode-card" class="next-episode-card hidden">
+            <div class="next-episode-header">Próximo Episódio em <span id="next-episode-timer">15</span>s</div>
+            <div class="next-episode-body">
+                <div class="next-episode-thumbnail" id="next-episode-thumb-container">
+                    <img id="next-episode-img" src="" alt="Episódio">
+                    <div class="next-episode-play-btn">
+                        <svg viewBox="0 0 24 24" fill="currentColor" style="width: 14px; height: 14px;"><path d="M8 5v14l11-7z"/></svg>
+                    </div>
+                </div>
+                <div class="next-episode-info">
+                    <div id="next-episode-title" class="next-ep-title">Nome do Episódio</div>
+                    <div id="next-episode-show" class="next-ep-show">Nome da Série</div>
+                </div>
+            </div>
+            <div class="next-episode-footer">
+                <button id="btn-next-episode-play" class="next-ep-btn play">Reproduzir Agora</button>
+                <button id="btn-next-episode-cancel" class="next-ep-btn cancel">Cancelar</button>
+            </div>
+        </div>
     </div>
 
     <!-- Series Details Modal (Moved to body level to escape transform/filter container bounds) -->
@@ -456,6 +477,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=2.5"></script>
+    <script src="app.js?v=2.6"></script>
 </body>
 </html>

@@ -2571,3 +2571,161 @@ body.modal-open .container {
     flex-direction: column;
     width: 100%;
 }
+
+/* Card de Próximo Episódio no Player (Netflix Style) */
+.next-episode-card {
+    position: absolute;
+    bottom: 80px;
+    right: 40px;
+    background: rgba(20, 20, 20, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    padding: 16px;
+    width: 320px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.85);
+    z-index: 10010;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    backdrop-filter: blur(10px);
+    transition: transform 0.3s ease, opacity 0.3s ease;
+    animation: slideInRight 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100px);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.next-episode-card.hidden {
+    display: none !important;
+}
+
+.next-episode-header {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #a3a3a3;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.next-episode-body {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.next-episode-thumbnail {
+    position: relative;
+    width: 100px;
+    height: 56px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #141414;
+    cursor: pointer;
+    flex-shrink: 0;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.next-episode-thumbnail img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.next-episode-play-btn {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.next-episode-thumbnail:hover .next-episode-play-btn {
+    opacity: 1;
+}
+
+.next-episode-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+    text-align: left;
+}
+
+.next-ep-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.next-ep-show {
+    font-size: 0.75rem;
+    color: #a3a3a3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.next-episode-footer {
+    display: flex;
+    gap: 8px;
+}
+
+.next-ep-btn {
+    flex: 1;
+    padding: 8px 12px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border-radius: 4px;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+}
+
+.next-ep-btn.play {
+    background: #e50914;
+    color: #fff;
+}
+
+.next-ep-btn.play:hover {
+    background: #b80710;
+    transform: scale(1.02);
+}
+
+.next-ep-btn.cancel {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.next-ep-btn.cancel:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.02);
+}
+
+/* Responsivo para o card no celular */
+@media (max-width: 600px) {
+    .next-episode-card {
+        bottom: 80px;
+        right: 16px;
+        left: 16px;
+        width: auto;
+    }
+}

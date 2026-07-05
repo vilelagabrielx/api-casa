@@ -965,7 +965,12 @@ let netflixState = {
     activeHoverTimeout: null,
     activeHoverVideo: null,
     activeHoverCard: null,
-    favorites: JSON.parse(localStorage.getItem('cine_favorites') || '[]')
+    favorites: JSON.parse(localStorage.getItem('cine_favorites') || '[]'),
+    
+    // Controle do popup de próximo episódio
+    nextEpisodeDismissed: false,
+    nextEpisodeAutoPlayTriggered: false,
+    nextEpisodeTimerInterval: null
 };
 
 // Bind de Elementos
@@ -2112,6 +2117,31 @@ function setHeroUI(ch) {
 function playVideo(channel, startPosition = 0) {
     if (!netflixPlayerModal || !netflixState.videoJsPlayer) return;
     
+    // Reseta estado do próximo episódio
+    netflixState.nextEpisodeDismissed = false;
+    netflixState.nextEpisodeAutoPlayTriggered = false;
+    if (netflixState.nextEpisodeTimerInterval) {
+        clearInterval(netflixState.nextEpisodeTimerInterval);
+        netflixState.nextEpisodeTimerInterval = null;
+    }
+    const nextCardEl = document.getElementById('next-episode-card');
+    if (nextCardEl) nextCardEl.classList.add('hidden');
+
+    const getNextEpisode = () => {
+        if (netflixState.currentSeriesEpisodes && netflixState.currentSeriesEpisodes.length > 0 && netflixState.currentEpisode) {
+            const currentEp = netflixState.currentEpisode;
+            const sortedEps = [...netflixState.currentSeriesEpisodes].sort((a, b) => {
+                if (a.season !== b.season) return a.season - b.season;
+                return a.episode - b.episode;
+            });
+            const idx = sortedEps.findIndex(ep => ep.season === currentEp.season && ep.episode === currentEp.episode);
+            if (idx !== -1 && idx + 1 < sortedEps.length) {
+                return sortedEps[idx + 1];
+            }
+        }
+        return null;
+    };
+    
     // Remove listener de teclado antigo se houver
     if (netflixState.playerKeyDownHandler) {
         document.removeEventListener('keydown', netflixState.playerKeyDownHandler);
@@ -2239,10 +2269,95 @@ function playVideo(channel, startPosition = 0) {
             clearWatchdogs();
         });
         
+        let nextEpCountdownVal = 15;
+
         player.on('timeupdate', () => {
             if (player.currentTime() > 0.1 && !isStarted) {
                 isStarted = true;
                 clearWatchdogs();
+            }
+
+            // Pop-up do próximo episódio nos últimos minutos/segundos
+            const nextEp = getNextEpisode();
+            if (nextEp && !netflixState.nextEpisodeDismissed && !netflixState.nextEpisodeAutoPlayTriggered) {
+                const dur = player.duration();
+                const cur = player.currentTime();
+                if (dur && dur !== Infinity && dur > 60) {
+                    const timeLeft = dur - cur;
+
+                    // Mostra o card se faltar 45 segundos ou menos
+                    if (timeLeft <= 45 && timeLeft > 2) {
+                        const nextCard = document.getElementById('next-episode-card');
+                        if (nextCard && nextCard.classList.contains('hidden')) {
+                            const nextEpTitle = document.getElementById('next-episode-title');
+                            const nextEpShow = document.getElementById('next-episode-show');
+                            const nextEpImg = document.getElementById('next-episode-img');
+                            
+                            const epName = nextEp.name || `Episódio ${nextEp.episode}`;
+                            nextEpTitle.innerText = `T${nextEp.season}:E${nextEp.episode} - ${epName}`;
+                            nextEpShow.innerText = netflixState.currentSeriesName || "Série";
+                            
+                            nextEpImg.src = nextEp.logo || channel.logo || '';
+                            
+                            nextCard.classList.remove('hidden');
+                            
+                            // Define o contador inicial (o menor entre 15 e o tempo que resta)
+                            nextEpCountdownVal = Math.min(15, Math.floor(timeLeft));
+                            const timerText = document.getElementById('next-episode-timer');
+                            if (timerText) timerText.innerText = nextEpCountdownVal;
+                            
+                            const btnPlay = document.getElementById('btn-next-episode-play');
+                            const btnCancel = document.getElementById('btn-next-episode-cancel');
+                            const thumbContainer = document.getElementById('next-episode-thumb-container');
+                            
+                            const triggerNextEpPlay = () => {
+                                if (netflixState.nextEpisodeAutoPlayTriggered) return;
+                                netflixState.nextEpisodeAutoPlayTriggered = true;
+                                nextCard.classList.add('hidden');
+                                clearInterval(netflixState.nextEpisodeTimerInterval);
+                                netflixState.nextEpisodeTimerInterval = null;
+                                
+                                const nextChannelMock = {
+                                    name: `${netflixState.currentSeriesName} S0${nextEp.season}E${String(nextEp.episode).padStart(2, '0')}`,
+                                    logo: nextEp.logo || channel.logo,
+                                    group: channel.group,
+                                    url: nextEp.url
+                                };
+                                netflixState.currentEpisode = nextEp;
+                                playVideo(nextChannelMock);
+                            };
+                            
+                            btnPlay.onclick = (e) => {
+                                e.stopPropagation();
+                                triggerNextEpPlay();
+                            };
+                            if (thumbContainer) {
+                                thumbContainer.onclick = (e) => {
+                                    e.stopPropagation();
+                                    triggerNextEpPlay();
+                                };
+                            }
+                            
+                            btnCancel.onclick = (e) => {
+                                e.stopPropagation();
+                                nextCard.classList.add('hidden');
+                                netflixState.nextEpisodeDismissed = true;
+                                clearInterval(netflixState.nextEpisodeTimerInterval);
+                                netflixState.nextEpisodeTimerInterval = null;
+                            };
+                            
+                            clearInterval(netflixState.nextEpisodeTimerInterval);
+                            netflixState.nextEpisodeTimerInterval = setInterval(() => {
+                                nextEpCountdownVal--;
+                                if (timerText) timerText.innerText = nextEpCountdownVal;
+                                
+                                if (nextEpCountdownVal <= 0) {
+                                    triggerNextEpPlay();
+                                }
+                            }, 1000);
+                        }
+                    }
+                }
             }
         });
         
@@ -2435,6 +2550,14 @@ function closePlayer() {
     netflixState.currentSeriesEpisodes = null;
     netflixState.currentSeriesName = null;
     netflixState.currentEpisode = null;
+    
+    // Limpa o timer do próximo episódio e esconde o card
+    if (netflixState.nextEpisodeTimerInterval) {
+        clearInterval(netflixState.nextEpisodeTimerInterval);
+        netflixState.nextEpisodeTimerInterval = null;
+    }
+    const nextCardEl = document.getElementById('next-episode-card');
+    if (nextCardEl) nextCardEl.classList.add('hidden');
     
     if (netflixPlayerModal) netflixPlayerModal.classList.add('hidden');
     document.body.classList.remove('modal-open');
