@@ -2204,14 +2204,34 @@ function playVideo(channel, startPosition = 0) {
         
         const playUrl = `/api/m3u/stream?url=${encodeURIComponent(channel.url)}`;
         
-        // Watchdog de carregamento inicial (8 segundos)
+        // Timeout adaptado ao tipo de stream:
+        // MP4 (filmes/séries) = 90s (arquivo grande, proxy precisa de tempo)
+        // M3U8 live = 20s
+        // TS = 15s
+        const watchdogMs = isTS ? 15000 : isM3U8 ? 20000 : 90000;
+        
+        // Watchdog de carregamento inicial
         netflixState.playbackWatchdog = setTimeout(() => {
             if (!isStarted) {
-                console.warn("[Watchdog] A reprodução do canal demorou mais de 8s para iniciar.");
-                showToast("A transmissão está demorando muito para responder ou está offline.", "warning");
-                closePlayer();
+                const label = isTS || isM3U8 ? 'canal' : 'filme/episódio';
+                console.warn(`[Watchdog] O ${label} ainda não iniciou após ${watchdogMs/1000}s.`);
+                if (!isTS && !isM3U8) {
+                    // Para MP4 só avisa — pode estar buffering ainda
+                    showToast(
+                        `Carregando conteúdo... Se demorar mais, clique em Retry.`,
+                        'warning',
+                        { label: 'Retry', cb: () => { closePlayer(); setTimeout(() => initPlayer(pos), 300); } }
+                    );
+                } else {
+                    showToast(
+                        `${label} está demorando para responder.`,
+                        'warning',
+                        { label: 'Retry', cb: () => { closePlayer(); setTimeout(() => initPlayer(pos), 300); } }
+                    );
+                    closePlayer();
+                }
             }
-        }, 8000);
+        }, watchdogMs);
         
         // Configura os event listeners usando a API do Video.js
         player.on('playing', () => {
@@ -2229,11 +2249,23 @@ function playVideo(channel, startPosition = 0) {
         player.on('waiting', () => {
             if (isStarted) {
                 if (!netflixState.bufferingWatchdog) {
+                    // Buffering timeout: mais tolerante para MP4
+                    const bufferMs = isTS || isM3U8 ? 12000 : 30000;
                     netflixState.bufferingWatchdog = setTimeout(() => {
-                        console.warn("[Watchdog] O buffer da transmissão travou por mais de 8s.");
-                        showToast("Conexão instável ou canal offline. Transmissão interrompida.", "error");
-                        closePlayer();
-                    }, 8000);
+                        console.warn(`[Watchdog] Buffer travou por ${bufferMs/1000}s.`);
+                        showToast(
+                            'Conexão instável. Deseja tentar novamente?',
+                            'warning',
+                            { label: 'Retry', cb: () => { closePlayer(); setTimeout(() => initPlayer(pos), 300); } }
+                        );
+                        if (isTS || isM3U8) closePlayer();
+                    }, bufferMs);
+                }
+            } else {
+                // Se ainda não iniciou e entrou em waiting, reseta o timer de buffering
+                if (netflixState.bufferingWatchdog) {
+                    clearTimeout(netflixState.bufferingWatchdog);
+                    netflixState.bufferingWatchdog = null;
                 }
             }
         });
@@ -2242,7 +2274,15 @@ function playVideo(channel, startPosition = 0) {
             if (netflixState.currentVideoInfo) {
                 const err = player.error();
                 console.error("Erro no Video.js player:", err);
-                showToast("Erro ao reproduzir canal. A transmissão pode estar offline.", "error");
+                const isMp4 = !isTS && !isM3U8;
+                const msg = isMp4
+                    ? 'Erro ao carregar. O servidor pode estar ocupado.'
+                    : 'Erro ao reproduzir canal. A transmissão pode estar offline.';
+                showToast(
+                    msg,
+                    'error',
+                    { label: 'Retry', cb: () => { closePlayer(); setTimeout(() => playVideo(channel, pos), 400); } }
+                );
                 closePlayer();
             }
         });
@@ -2526,7 +2566,7 @@ function closeSeriesDetails() {
     seriesEpisodesData = [];
 }
 
-function showToast(message, type = 'error') {
+function showToast(message, type = 'error', action = null) {
     let container = document.querySelector('.toast-container');
     if (!container) {
         container = document.createElement('div');
@@ -2544,17 +2584,54 @@ function showToast(message, type = 'error') {
     
     toast.innerHTML = `
         <span class="toast-icon">${icon}</span>
-        <span class="toast-message">${message}</span>
+        <span class="toast-message" style="flex-grow: 1;">${message}</span>
     `;
+    
+    if (action && action.label && action.cb) {
+        const actionBtn = document.createElement('button');
+        actionBtn.className = 'toast-action-btn';
+        actionBtn.innerText = action.label;
+        actionBtn.style.marginLeft = '12px';
+        actionBtn.style.padding = '4px 10px';
+        actionBtn.style.border = '1px solid rgba(255, 255, 255, 0.3)';
+        actionBtn.style.borderRadius = '4px';
+        actionBtn.style.background = 'rgba(255, 255, 255, 0.1)';
+        actionBtn.style.color = '#fff';
+        actionBtn.style.cursor = 'pointer';
+        actionBtn.style.fontSize = '0.8rem';
+        actionBtn.style.fontWeight = 'bold';
+        actionBtn.style.transition = 'all 0.2s';
+        
+        actionBtn.addEventListener('mouseenter', () => {
+            actionBtn.style.background = '#fff';
+            actionBtn.style.color = '#000';
+        });
+        actionBtn.addEventListener('mouseleave', () => {
+            actionBtn.style.background = 'rgba(255, 255, 255, 0.1)';
+            actionBtn.style.color = '#fff';
+        });
+        
+        actionBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            action.cb();
+            toast.remove();
+        });
+        toast.appendChild(actionBtn);
+    }
     
     container.appendChild(toast);
     
+    // Se tiver botão de ação, vamos dar um tempo um pouco maior para a pessoa clicar (8 segundos em vez de 5)
+    const timeoutDuration = action ? 8000 : 5000;
+    
     setTimeout(() => {
-        toast.remove();
-        if (container.children.length === 0) {
-            container.remove();
+        if (toast.parentNode) {
+            toast.remove();
+            if (container.children.length === 0) {
+                container.remove();
+            }
         }
-    }, 5000);
+    }, timeoutDuration);
 }
 
 function uploadPlaylistFile(file) {
