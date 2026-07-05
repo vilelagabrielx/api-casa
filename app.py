@@ -187,11 +187,69 @@ import queue
 tmdb_queue = queue.Queue()
 
 def tmdb_worker():
+    idle_sleep = False
+    
     while True:
+        item = None
         try:
-            item = tmdb_queue.get()
+            # Se não houver nada pendente no banco, dorme um tempo para poupar recurso
+            if idle_sleep:
+                time.sleep(30.0)
+                idle_sleep = False
+                
+            try:
+                item = tmdb_queue.get(timeout=5.0)
+            except queue.Empty:
+                # Fila de exibição imediata vazia: busca ativamente os pendentes do banco
+                conn = sqlite3.connect(DB_PATH, timeout=30.0)
+                cursor = conn.cursor()
+                
+                # 1. Tenta prefetch prioritário para Filmes e Séries pendentes
+                cursor.execute('''
+                    SELECT id, name, is_series, series_name 
+                    FROM channels 
+                    WHERE tmdb_queried = 0 
+                      AND (
+                          is_series = 1 
+                          OR group_title LIKE '%filme%' 
+                          OR group_title LIKE '%movie%' 
+                          OR group_title LIKE '%série%' 
+                          OR group_title LIKE '%series%' 
+                          OR group_title LIKE '%dorama%' 
+                          OR group_title LIKE '%netflix%' 
+                          OR group_title LIKE '%prime%' 
+                          OR group_title LIKE '%disney%' 
+                          OR group_title LIKE '%hbo%' 
+                          OR group_title LIKE '%novela%'
+                      )
+                    LIMIT 50
+                ''')
+                pending_rows = cursor.fetchall()
+                
+                # 2. Se não encontrar filmes/séries prioritários, busca qualquer canal pendente geral
+                if not pending_rows:
+                    cursor.execute('''
+                        SELECT id, name, is_series, series_name 
+                        FROM channels 
+                        WHERE tmdb_queried = 0 
+                        LIMIT 50
+                    ''')
+                    pending_rows = cursor.fetchall()
+                
+                conn.close()
+                
+                if pending_rows:
+                    print(f"[TMDb Prefetch] Adicionando {len(pending_rows)} canais/filmes pendentes na fila de busca em segundo plano.")
+                    for row in pending_rows:
+                        tmdb_queue.put((row[0], row[1], row[2], row[3]))
+                else:
+                    # Nada pendente no banco de dados inteiro!
+                    idle_sleep = True
+                continue
+
             if item is None:
                 break
+                
             ch_id, ch_name, is_series, series_name = item
             
             # Conecta usando timeout para evitar lock concorrente
@@ -206,6 +264,7 @@ def tmdb_worker():
             
             if row and row[0] == 1:
                 conn.close()
+                tmdb_queue.task_done()
                 continue
                 
             search_name = series_name if is_series == 1 else ch_name
@@ -237,11 +296,17 @@ def tmdb_worker():
                 
             conn.commit()
             conn.close()
-            time.sleep(0.15) # Evita sobrecarga de requisições à API
+            
+            time.sleep(0.25) # Delay seguro para TMDb
+            tmdb_queue.task_done()
+            
         except Exception as e:
             print("[TMDb Background] Erro no worker:", e)
-        finally:
-            tmdb_queue.task_done()
+            if item is not None:
+                try:
+                    tmdb_queue.task_done()
+                except Exception:
+                    pass
 
 def init_db():
     os.makedirs(os.path.join(BASE_DIR, 'static', 'cache'), exist_ok=True)
