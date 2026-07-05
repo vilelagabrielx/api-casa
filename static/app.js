@@ -31,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initColorPicker();
     setupEventListeners();
     fetchStatus(); // Busca o status inicial da lâmpada
+    checkM3UStatus(); // Verifica se há lista M3U ativa no banco logo na inicialização
 });
 
 // Inicialização do Picker
