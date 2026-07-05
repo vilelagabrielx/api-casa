@@ -15,7 +15,7 @@
     <script src="https://vjs.zencdn.net/8.10.0/video.min.js"></script>
     <!-- Mpegts.js for IPTV / .ts streaming -->
     <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js"></script>
-    <link rel="stylesheet" href="style.css?v=2.7">
+    <link rel="stylesheet" href="style.css?v=2.8">
 </head>
 <body>
     <div class="background-glow"></div>
@@ -263,6 +263,16 @@
                         <input type="file" id="m3u-file-input" accept=".m3u,.m3u8" style="display: none;">
                     </div>
                 </div>
+                <!-- Barra de progresso de importação em tempo real -->
+                <div id="m3u-import-progress-container" class="import-progress-container hidden">
+                    <div class="progress-bar-wrapper">
+                        <div id="m3u-import-progress-bar" class="progress-bar-fill" style="width: 0%;"></div>
+                    </div>
+                    <div class="progress-status-info">
+                        <span id="m3u-import-progress-message">Conectando ao provedor...</span>
+                        <span id="m3u-import-progress-percent">0%</span>
+                    </div>
+                </div>
             </div>
 
             <!-- Netflix Catalog Screen -->
@@ -477,6 +487,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=2.7"></script>
+    <script src="app.js?v=2.8"></script>
 </body>
 </html>

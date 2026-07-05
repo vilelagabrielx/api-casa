@@ -982,6 +982,10 @@ const m3uUrlInput = document.getElementById('m3u-url-input');
 const btnImportM3uUrl = document.getElementById('btn-import-m3u-url');
 const m3uFileDrop = document.getElementById('m3u-file-drop');
 const m3uFileInput = document.getElementById('m3u-file-input');
+const m3uImportProgressContainer = document.getElementById('m3u-import-progress-container');
+const m3uImportProgressBar = document.getElementById('m3u-import-progress-bar');
+const m3uImportProgressMessage = document.getElementById('m3u-import-progress-message');
+const m3uImportProgressPercent = document.getElementById('m3u-import-progress-percent');
 const netflixSearch = document.getElementById('netflix-search');
 const btnChangePlaylist = document.getElementById('btn-change-playlist');
 const netflixCategoryTags = document.getElementById('netflix-category-tags');
@@ -1033,8 +1037,8 @@ function setupNetflixEvents() {
         btnImportM3uUrl.addEventListener('click', () => {
             const url = m3uUrlInput.value.trim();
             if (!url) return showToast("Por favor, cole um link válido.", "warning");
-            btnImportM3uUrl.disabled = true;
-            btnImportM3uUrl.textContent = "Baixando...";
+            
+            showToast("Iniciando importação no servidor...", "info");
             
             fetch('/api/m3u/import', {
                 method: 'POST',
@@ -1043,20 +1047,14 @@ function setupNetflixEvents() {
             })
             .then(r => r.json())
             .then(data => {
-                btnImportM3uUrl.disabled = false;
-                btnImportM3uUrl.textContent = "Importar Link";
                 if (data.success) {
-                    m3uUrlInput.value = "";
-                    showToast(`Lista importada com sucesso! ${data.count} canais catalogados.`, "success");
-                    checkM3UStatus();
+                    startM3UImportPolling();
                 } else {
                     showToast(`Erro: ${data.error}`, "error");
                 }
             })
             .catch(err => {
-                btnImportM3uUrl.disabled = false;
-                btnImportM3uUrl.textContent = "Importar Link";
-                showToast("Erro de conexão ao importar lista.", "error");
+                showToast("Erro de conexão ao iniciar importação.", "error");
             });
         });
     }
@@ -2778,7 +2776,7 @@ function uploadPlaylistFile(file) {
     const reader = new FileReader();
     const name = playlistNewName.value.trim() || file.name.replace(/\.[^/.]+$/, "");
     
-    showToast("Processando arquivo...", "info");
+    showToast("Processando arquivo local...", "info");
     
     reader.onload = function(e) {
         const text = e.target.result;
@@ -2793,11 +2791,8 @@ function uploadPlaylistFile(file) {
         .then(r => r.json())
         .then(data => {
             if (data.success) {
-                playlistNewName.value = "";
-                showToast(`Lista "${name}" importada! ${data.count} canais analisados.`, "success");
-                SoundFX.playChime();
-                fetchPlaylists();
-                checkM3UStatus();
+                if (playlistNewName) playlistNewName.value = "";
+                startM3UImportPolling();
             } else {
                 showToast(`Erro ao importar: ${data.error}`, "error");
             }
@@ -2807,6 +2802,59 @@ function uploadPlaylistFile(file) {
         });
     };
     reader.readAsText(file);
+}
+
+function startM3UImportPolling() {
+    if (!m3uImportProgressContainer || !m3uImportProgressBar || !m3uImportProgressMessage || !m3uImportProgressPercent) return;
+    
+    // Mostra o container de progresso
+    m3uImportProgressContainer.classList.remove('hidden');
+    m3uImportProgressBar.style.width = '0%';
+    m3uImportProgressMessage.innerText = 'Conectando ao provedor...';
+    m3uImportProgressPercent.innerText = '0%';
+    
+    // Desabilita botões e inputs de setup
+    if (btnImportM3uUrl) btnImportM3uUrl.disabled = true;
+    if (m3uUrlInput) m3uUrlInput.disabled = true;
+    
+    let intervalId = setInterval(() => {
+        fetch('/api/m3u/import/status')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === "downloading" || data.status === "parsing" || data.status === "saving") {
+                m3uImportProgressBar.style.width = data.percent + '%';
+                m3uImportProgressMessage.innerText = data.message;
+                m3uImportProgressPercent.innerText = data.percent + '%';
+            } else if (data.status === "completed") {
+                clearInterval(intervalId);
+                m3uImportProgressBar.style.width = '100%';
+                m3uImportProgressMessage.innerText = data.message;
+                m3uImportProgressPercent.innerText = '100%';
+                
+                showToast("Importação concluída com sucesso!", "success");
+                SoundFX.playChime();
+                
+                setTimeout(() => {
+                    m3uImportProgressContainer.classList.add('hidden');
+                    if (btnImportM3uUrl) btnImportM3uUrl.disabled = false;
+                    if (m3uUrlInput) {
+                        m3uUrlInput.disabled = false;
+                        m3uUrlInput.value = "";
+                    }
+                    checkM3UStatus();
+                }, 2000);
+            } else if (data.status === "error") {
+                clearInterval(intervalId);
+                showToast(`Erro na importação: ${data.message}`, "error");
+                m3uImportProgressContainer.classList.add('hidden');
+                if (btnImportM3uUrl) btnImportM3uUrl.disabled = false;
+                if (m3uUrlInput) m3uUrlInput.disabled = false;
+            }
+        })
+        .catch(() => {
+            // Ignora pequenos erros de rede do polling
+        });
+    }, 1000);
 }
 
 function fetchPlaylists() {

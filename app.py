@@ -189,6 +189,121 @@ tmdb_queue = queue.Queue()
 
 preload_tasks = {}
 
+import_status = {
+    "status": "idle",
+    "percent": 0,
+    "message": ""
+}
+
+def async_import_worker(m3u_url, m3u_content, playlist_name, is_json, post_data):
+    global import_status
+    try:
+        m3u_text = ""
+        if is_json and m3u_url:
+            import_status["status"] = "downloading"
+            import_status["percent"] = 5
+            import_status["message"] = "Conectando ao servidor da lista IPTV..."
+            print(f"[Import Worker] Baixando M3U: {m3u_url}")
+            
+            import urllib.request
+            req = urllib.request.Request(m3u_url, headers={'User-Agent': 'Mozilla/5.0'})
+            
+            with urllib.request.urlopen(req, timeout=30) as response:
+                content_length = response.headers.get('Content-Length')
+                total_size = int(content_length) if content_length else None
+                
+                chunks = []
+                bytes_downloaded = 0
+                
+                while True:
+                    chunk = response.read(1024 * 1024) # 1MB chunks
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    bytes_downloaded += len(chunk)
+                    
+                    if total_size:
+                        percent = int((bytes_downloaded / total_size) * 30)
+                        import_status["percent"] = min(30, max(5, percent))
+                        import_status["message"] = f"Baixando lista: {bytes_downloaded / (1024*1024):.1f}MB / {total_size / (1024*1024):.1f}MB ({import_status['percent']}%)"
+                    else:
+                        import_status["message"] = f"Baixando lista: {bytes_downloaded / (1024*1024):.1f}MB carregados..."
+                        
+                m3u_text = b"".join(chunks).decode('utf-8', errors='replace')
+        else:
+            if is_json:
+                m3u_text = m3u_content
+            else:
+                m3u_text = post_data.decode('utf-8', errors='replace')
+                
+        import_status["status"] = "parsing"
+        import_status["percent"] = 35
+        import_status["message"] = "Analisando formato e estruturando canais..."
+        
+        parsed_channels = parse_m3u_content(m3u_text)
+        if not parsed_channels:
+            raise Exception("Nenhum canal válido encontrado na lista M3U. Verifique o link ou arquivo.")
+            
+        if not playlist_name:
+            if m3u_url:
+                playlist_name = m3u_url.split('/')[-1] or "Lista Remota"
+            else:
+                playlist_name = f"Lista IPTV {int(time.time())}"
+                
+        import_status["status"] = "saving"
+        import_status["percent"] = 40
+        import_status["message"] = f"Salvando {len(parsed_channels)} canais no banco de dados..."
+        
+        conn = sqlite3.connect(DB_PATH, timeout=30.0)
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "INSERT INTO playlists (name, url, active) VALUES (?, ?, 1)",
+            (playlist_name, m3u_url if m3u_url else None)
+        )
+        playlist_id = cursor.lastrowid
+        
+        total_channels = len(parsed_channels)
+        channels_to_insert = []
+        
+        for idx, (name, logo, group, url) in enumerate(parsed_channels):
+            is_series, series_name, season, episode, ep_name = parse_series_info(name)
+            channels_to_insert.append((
+                playlist_id, name, logo, group, url,
+                1 if is_series else 0,
+                series_name if is_series else None,
+                season, episode,
+                ep_name if is_series else None
+            ))
+            
+            # Insere no SQLite em lotes de 10.000 para reportar progresso incremental
+            if len(channels_to_insert) >= 10000 or idx == total_channels - 1:
+                cursor.executemany(
+                    "INSERT INTO channels (playlist_id, name, logo, group_title, url, is_series, series_name, season, episode, episode_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    channels_to_insert
+                )
+                conn.commit()
+                channels_to_insert = []
+                
+                # Progresso de 40% a 95%
+                inserted = idx + 1
+                percent = 40 + int((inserted / total_channels) * 55)
+                import_status["percent"] = min(95, percent)
+                import_status["message"] = f"Gravando no banco: {inserted}/{total_channels} canais ({import_status['percent']}%)"
+                
+        conn.close()
+        
+        import_status["status"] = "completed"
+        import_status["percent"] = 100
+        import_status["message"] = f"Sucesso! {total_channels} canais importados e indexados."
+        
+    except Exception as e:
+        print("[Import Worker] Erro:", e)
+        import_status["status"] = "error"
+        import_status["percent"] = 0
+        import_status["message"] = str(e)
+
+
 def get_url_hash(url):
     import hashlib
     return hashlib.md5(url.encode('utf-8')).hexdigest()
@@ -1092,6 +1207,8 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.handle_m3u_history_position()
         elif parsed_path.path == '/api/m3u/series/episodes':
             self.handle_m3u_series_episodes()
+        elif parsed_path.path == '/api/m3u/import/status':
+            self.handle_m3u_import_status()
         elif parsed_path.path == '/api/m3u/preload':
             self.handle_m3u_preload()
         elif parsed_path.path == '/api/m3u/stream':
@@ -1375,11 +1492,19 @@ class BulbHandler(SimpleHTTPRequestHandler):
 
     # Endpoints do Cine Casa (Netflix Local IPTV)
     def handle_m3u_import(self):
+        global import_status
         try:
+            # Verifica se já há uma importação rodando
+            if import_status["status"] in ["downloading", "parsing", "saving"]:
+                self.send_json_response({
+                    "success": False,
+                    "error": "Já existe uma importação de playlist ativa em andamento no servidor."
+                }, 400)
+                return
+
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length)
             
-            # Tenta decodificar como JSON
             is_json = False
             m3u_url = ""
             m3u_content = ""
@@ -1395,36 +1520,10 @@ class BulbHandler(SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
-            m3u_text = ""
-            if is_json:
-                if m3u_url:
-                    print(f"[Cine Casa] Baixando lista M3U da URL: {m3u_url}")
-                    import urllib.request
-                    req = urllib.request.Request(m3u_url, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=15) as response:
-                        m3u_text = response.read().decode('utf-8', errors='replace')
-                else:
-                    m3u_text = m3u_content
-            else:
-                m3u_text = post_data.decode('utf-8', errors='replace')
-
-            # Faz o parsing da lista
-            parsed_channels = parse_m3u_content(m3u_text)
-            if not parsed_channels:
-                raise Exception("Nenhum canal válido encontrado na lista M3U. Verifique a sintaxe.")
-
-            # Se o nome da playlist estiver vazio, define um padrão
-            if not playlist_name:
-                if m3u_url:
-                    playlist_name = m3u_url.split('/')[-1] or "Lista Remota"
-                else:
-                    playlist_name = f"Lista IPTV {int(time.time())}"
-
-            # Conecta e cria a playlist no banco, verificando duplicatas de URL
-            conn = sqlite3.connect(DB_PATH, timeout=30.0)
-            cursor = conn.cursor()
-            
-            if m3u_url:
+            # Valida duplicidade de link no banco sincronamente (antes de iniciar o worker)
+            if is_json and m3u_url:
+                conn = sqlite3.connect(DB_PATH, timeout=30.0)
+                cursor = conn.cursor()
                 cursor.execute("SELECT name FROM playlists WHERE url = ?", (m3u_url,))
                 exists = cursor.fetchone()
                 if exists:
@@ -1434,36 +1533,25 @@ class BulbHandler(SimpleHTTPRequestHandler):
                         "error": f"Esta lista M3U já está cadastrada com o nome: '{exists[0]}'."
                     }, 400)
                     return
+                conn.close()
+
+            # Inicializa status e dispara thread assíncrona
+            import_status = {
+                "status": "downloading" if (is_json and m3u_url) else "parsing",
+                "percent": 0,
+                "message": "Conectando ao provedor..." if (is_json and m3u_url) else "Processando dados do arquivo..."
+            }
             
-            cursor.execute(
-                "INSERT INTO playlists (name, url, active) VALUES (?, ?, 1)",
-                (playlist_name, m3u_url if m3u_url else None)
-            )
-            playlist_id = cursor.lastrowid
-
-            # Analisa e mapeia os canais identificando quais são episódios de séries
-            channels_to_insert = []
-            for name, logo, group, url in parsed_channels:
-                is_series, series_name, season, episode, ep_name = parse_series_info(name)
-                channels_to_insert.append((
-                    playlist_id, name, logo, group, url,
-                    1 if is_series else 0,
-                    series_name if is_series else None,
-                    season, episode,
-                    ep_name if is_series else None
-                ))
-
-            # Insere no SQLite em lote de forma extremamente rápida
-            cursor.executemany(
-                "INSERT INTO channels (playlist_id, name, logo, group_title, url, is_series, series_name, season, episode, episode_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                channels_to_insert
-            )
-            conn.commit()
-            conn.close()
-
-            print(f"[Cine Casa] Importação concluída. Playlist ID: {playlist_id}. Total de canais: {len(parsed_channels)}")
-            self.send_json_response({"success": True, "count": len(parsed_channels)})
+            import threading
+            threading.Thread(
+                target=async_import_worker,
+                args=(m3u_url, m3u_content, playlist_name, is_json, post_data),
+                daemon=True
+            ).start()
+            
+            self.send_json_response({"success": True, "status": "started"})
         except Exception as e:
+            import_status = {"status": "error", "percent": 0, "message": str(e)}
             self.send_error_response(str(e))
 
     def handle_m3u_status(self):
@@ -1801,6 +1889,9 @@ class BulbHandler(SimpleHTTPRequestHandler):
             self.send_json_response({"success": True, "episodes": episodes})
         except Exception as e:
             self.send_error_response(str(e))
+
+    def handle_m3u_import_status(self):
+        self.send_json_response(import_status)
 
     def handle_m3u_preload(self):
         parsed = urlparse(self.path)
