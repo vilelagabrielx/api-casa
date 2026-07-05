@@ -1371,41 +1371,42 @@ const SoundFX = {
             this.audioCtx.resume();
         }
     },
-    // Som clássico "Tudum" da Netflix
+    // Som moderno premium ao clicar em filme/série
     playTudum() {
         try {
             this.init();
             const ctx = this.audioCtx;
             const now = ctx.currentTime;
-            
-            // Primeiro tom grave
-            const osc1 = ctx.createOscillator();
-            const gain1 = ctx.createGain();
-            osc1.type = 'sawtooth';
-            osc1.frequency.setValueAtTime(80, now);
-            osc1.frequency.linearRampToValueAtTime(65, now + 0.6);
-            gain1.gain.setValueAtTime(0.2, now);
-            gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
-            osc1.connect(gain1);
-            gain1.connect(ctx.destination);
-            
-            // Segundo tom harmônico
-            const osc2 = ctx.createOscillator();
-            const gain2 = ctx.createGain();
-            osc2.type = 'triangle';
-            osc2.frequency.setValueAtTime(160, now + 0.05);
-            osc2.frequency.linearRampToValueAtTime(130, now + 0.6);
-            gain2.gain.setValueAtTime(0.25, now + 0.05);
-            gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
-            osc2.connect(gain2);
-            gain2.connect(ctx.destination);
-            
-            osc1.start(now);
-            osc2.start(now + 0.05);
-            osc1.stop(now + 0.8);
-            osc2.stop(now + 0.8);
+
+            // Reverb simples via ConvolverNode improvisado com delay
+            const makeNote = (freq, startTime, duration, gainVal, type = 'sine') => {
+                const osc = ctx.createOscillator();
+                const gainNode = ctx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, startTime);
+                gainNode.gain.setValueAtTime(0, startTime);
+                gainNode.gain.linearRampToValueAtTime(gainVal, startTime + 0.01);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+                osc.connect(gainNode);
+                gainNode.connect(ctx.destination);
+                osc.start(startTime);
+                osc.stop(startTime + duration + 0.05);
+            };
+
+            // Nota 1: pop inicial agudo e curto (G5)
+            makeNote(783.99, now, 0.18, 0.18, 'sine');
+            // Subarmônico para dar corpo
+            makeNote(391.99, now, 0.18, 0.06, 'triangle');
+
+            // Nota 2: resolve para B5 (mais alto) - sensação de "abertura"
+            makeNote(987.77, now + 0.12, 0.28, 0.14, 'sine');
+            // Harmônico suave
+            makeNote(493.88, now + 0.12, 0.28, 0.04, 'triangle');
+
+            // Cauda levíssima de brilho (shimmer)
+            makeNote(1567.98, now + 0.22, 0.35, 0.04, 'sine');
         } catch (e) {
-            console.error("Erro no som Tudum:", e);
+            console.error("Erro no som de play:", e);
         }
     },
     // Som sutil de clique
