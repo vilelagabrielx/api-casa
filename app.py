@@ -14,6 +14,7 @@ from urllib.parse import urlparse, parse_qs
 import re
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(BASE_DIR)
 DB_PATH = os.path.join(BASE_DIR, 'static', 'cache', 'iptv_catalog.db')
 
 def rewrite_m3u8(content, manifest_url):
