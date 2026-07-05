@@ -206,7 +206,6 @@ def tmdb_worker():
             
             if row and row[0] == 1:
                 conn.close()
-                tmdb_queue.task_done()
                 continue
                 
             search_name = series_name if is_series == 1 else ch_name

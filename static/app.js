@@ -1852,7 +1852,18 @@ function createVideoCard(channel, progress = null) {
     hoverDetails.querySelector('.play-mini').addEventListener('click', (e) => {
         e.stopPropagation();
         SoundFX.playTudum();
-        playVideo(channel, progress ? progress.position : 0);
+        if (channel.is_series === 1) {
+            openSeriesDetails(
+                channel.series_name || channel.name, 
+                channel.logo, 
+                channel.group, 
+                channel.backdrop_path, 
+                channel.overview, 
+                channel.rating
+            );
+        } else {
+            playVideo(channel, progress ? progress.position : 0);
+        }
     });
     
     hoverDetails.querySelector('.like-mini').addEventListener('click', (e) => {
@@ -2048,7 +2059,11 @@ function setHeroUI(ch) {
     if (btnHeroPlay) {
         btnHeroPlay.onclick = () => {
             SoundFX.playTudum();
-            playVideo(ch);
+            if (ch.is_series === 1) {
+                openSeriesDetails(ch.series_name || ch.name, ch.logo, ch.group, ch.backdrop_path, ch.overview, ch.rating);
+            } else {
+                playVideo(ch);
+            }
         };
     }
     if (btnHeroInfo) {
