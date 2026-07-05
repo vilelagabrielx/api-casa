@@ -1583,10 +1583,14 @@ body.netflix-active .background-glow {
     display: flex;
     gap: 16px;
     overflow-x: auto;
+    overflow-y: visible;
     scroll-behavior: smooth;
-    padding: 15px 4px 25px 4px;
+    /* Increased bottom padding so the hover expansion panel is never clipped */
+    padding: 15px 4px 120px 4px;
     scrollbar-width: none;
     -ms-overflow-style: none;
+    /* Allow child hover panels to overflow visually downward */
+    clip-path: none;
 }
 
 .shelf-row::-webkit-scrollbar {
@@ -1640,19 +1644,25 @@ body.netflix-active .background-glow {
 }
 
 /* Grid & Hover Blur Effects */
-.netflix-shelves:hover .video-card:not(:hover) {
-    opacity: 0.5;
-    filter: brightness(0.6) blur(1px);
+/* Blur only on large screens where there is enough space */
+@media (min-width: 900px) {
+    .netflix-shelves:hover .video-card:not(:hover) {
+        opacity: 0.6;
+        filter: brightness(0.7);
+    }
 }
 
 /* Video Card (Premium Netflix style) */
 .video-card {
     position: relative;
     flex: 0 0 calc(100% / var(--cards-per-row) - 14px);
+    /* Minimum width so cards never get too small on narrow shelves */
+    min-width: 140px;
     aspect-ratio: 16/9;
     background: #181818;
-    border-radius: 4px;
-    overflow: hidden;
+    border-radius: 6px;
+    /* overflow visible so the hover expansion panel can appear below */
+    overflow: visible;
     cursor: pointer;
     z-index: 1;
     display: flex;
@@ -1663,11 +1673,11 @@ body.netflix-active .background-glow {
 }
 
 .video-card:hover {
-    transform: scale(1.18) translateY(-15px) translateZ(0);
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.85);
-    z-index: 20;
-    overflow: visible;
-    border-color: rgba(255, 255, 255, 0.2);
+    transform: scale(1.12) translateY(-12px) translateZ(0);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.9);
+    z-index: 50;
+    border-color: rgba(255, 255, 255, 0.25);
+    border-radius: 6px 6px 0 0;
 }
 
 .card-logo {
@@ -1675,11 +1685,14 @@ body.netflix-active .background-glow {
     height: 100%;
     object-fit: cover;
     background: #141414;
+    border-radius: 6px;
     transition: filter 0.3s ease;
+    display: block;
 }
 
 .video-card:hover .card-logo {
-    filter: brightness(0.85);
+    filter: brightness(0.8);
+    border-radius: 6px 6px 0 0;
 }
 
 /* Placeholder card when there is no logo */
@@ -1691,6 +1704,8 @@ body.netflix-active .background-glow {
     flex-direction: column;
     justify-content: space-between;
     padding: 12px;
+    border-radius: 6px;
+    overflow: hidden;
 }
 
 .card-placeholder-group {
@@ -1761,24 +1776,28 @@ body.netflix-active .background-glow {
 /* Card details revealed on hover */
 .card-hover-details {
     position: absolute;
-    top: 98%;
+    /* Sit flush below the scaled card */
+    top: 100%;
     left: 0;
     right: 0;
-    background: #181818;
-    padding: 14px;
-    border-bottom-left-radius: 4px;
-    border-bottom-right-radius: 4px;
+    background: #1a1a1a;
+    padding: 12px 14px;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
     opacity: 0;
     pointer-events: none;
-    transform: translateY(-10px);
-    transition: opacity 0.3s ease, transform 0.3s ease;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.85);
-    z-index: 21;
+    transform: translateY(-6px);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.9);
+    z-index: 51;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.18);
     border-top: none;
+    /* Prevent the panel itself from being clipped */
+    overflow: visible;
+    width: 100%;
 }
 
 .video-card:hover .card-hover-details {
@@ -1818,10 +1837,12 @@ body.netflix-active .background-glow {
     background-color: #ffffff;
     border-color: #ffffff;
     color: #000000;
+    font-size: 0.9rem;
 }
 
 .action-btn.play-mini:hover {
-    background-color: rgba(255,255,255,0.8);
+    background-color: rgba(255,255,255,0.85);
+    transform: scale(1.12);
 }
 
 .card-meta {
@@ -1874,29 +1895,44 @@ body.netflix-active .background-glow {
 }
 
 /* Custom Responsive Config with CSS Vars */
+/* Default (large desktop) */
 :root {
-    --cards-per-row: 6;
+    --cards-per-row: 5;
 }
 
-@media (min-width: 1400px) {
+@media (min-width: 1600px) {
     :root {
         --cards-per-row: 6;
     }
 }
 
-@media (max-width: 1399px) and (min-width: 1024px) {
+@media (max-width: 1599px) and (min-width: 1200px) {
+    :root {
+        --cards-per-row: 5;
+    }
+}
+
+@media (max-width: 1199px) and (min-width: 900px) {
     :root {
         --cards-per-row: 4;
     }
 }
 
-@media (max-width: 1023px) and (min-width: 600px) {
+@media (max-width: 899px) and (min-width: 600px) {
     :root {
         --cards-per-row: 3;
     }
 }
 
-@media (max-width: 599px) {
+/* Mobile landscape */
+@media (max-width: 599px) and (min-width: 420px) {
+    :root {
+        --cards-per-row: 3;
+    }
+}
+
+/* Mobile portrait */
+@media (max-width: 419px) {
     :root {
         --cards-per-row: 2;
     }
